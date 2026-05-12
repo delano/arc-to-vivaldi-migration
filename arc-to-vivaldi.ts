@@ -11,65 +11,14 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 
-// ---------- Arc JSON shapes (narrowed at the boundary; never `any`). ----------
-
-interface ArcSpaceIconType {
-  readonly icon: string | undefined;
-}
-
-interface ArcSpaceCustomInfo {
-  readonly iconType: ArcSpaceIconType | undefined;
-}
-
-interface ArcSpace {
-  readonly id: string;
-  readonly title: string;
-  readonly customInfo: ArcSpaceCustomInfo | undefined;
-  readonly newContainerIDs: readonly unknown[];
-}
-
-interface ArcTabData {
-  readonly savedURL: string | undefined;
-  readonly savedTitle: string | undefined;
-}
-
-interface ArcItemData {
-  readonly tab: ArcTabData | undefined;
-  readonly isList: boolean;
-}
-
-interface ArcItem {
-  readonly id: string;
-  readonly title: string | null;
-  readonly parentID: string | undefined;
-  readonly childrenIds: readonly string[];
-  readonly data: ArcItemData;
-}
-
-// ---------- Internal output tree ----------
-
-interface BookmarkLeaf {
-  readonly kind: "leaf";
-  readonly title: string;
-  readonly url: string;
-}
-
-interface BookmarkFolder {
-  readonly kind: "folder";
-  readonly title: string;
-  readonly children: readonly BookmarkNode[];
-}
-
-type BookmarkNode = BookmarkLeaf | BookmarkFolder;
-
-interface SpaceConversion {
-  readonly title: string;
-  readonly iconHint: string | undefined;
-  readonly pinned: readonly BookmarkNode[];
-  readonly unpinned: readonly BookmarkNode[];
-  readonly bookmarkCount: number;
-  readonly folderCount: number;
-}
+import type {
+  ArcSpace,
+  ArcSpaceCustomInfo,
+  ArcItem,
+  ArcTabData,
+  BookmarkNode,
+  SpaceConversion,
+} from "./lib/types.js";
 
 // ---------- Helpers ----------
 
