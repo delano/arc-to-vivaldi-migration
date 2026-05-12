@@ -55,3 +55,21 @@ export interface SpaceConversion {
   readonly bookmarkCount: number;
   readonly folderCount: number;
 }
+
+// Data embedded into the inject script.
+export interface InjectableTab {
+  readonly url: string;
+  readonly title: string;
+}
+
+export interface InjectableSpace {
+  readonly title: string;
+  readonly pinned: readonly InjectableTab[];
+  readonly unpinned: readonly InjectableTab[];
+}
+
+export interface InjectablePayload {
+  readonly generatedAt: string;
+  readonly sourcePath: string;
+  readonly spaces: readonly InjectableSpace[];
+}
