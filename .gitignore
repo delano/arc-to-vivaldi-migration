@@ -1,0 +1,12 @@
+node_modules/
+
+# Generated bookmark output
+arc-*.html
+split/
+
+# A real StorableSidebar.json contains personal browsing data — never commit it
+StorableSidebar.json
+
+*.log
+.DS_Store
+Thumbs.db
