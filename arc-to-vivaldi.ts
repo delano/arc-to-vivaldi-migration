@@ -19,6 +19,7 @@ import type {
   BookmarkNode,
   SpaceConversion,
 } from "./lib/types.js";
+import { parseArgs } from "./lib/cli.js";
 
 // ---------- Helpers ----------
 
@@ -67,49 +68,6 @@ function uniqueSlug(base: string, taken: Set<string>): string {
 }
 
 // ---------- CLI ----------
-
-interface CliArgs {
-  readonly input: string | undefined;
-  readonly output: string | undefined;
-  readonly verbose: boolean;
-  readonly split: boolean;
-}
-
-function parseArgs(argv: readonly string[]): CliArgs {
-  let input: string | undefined;
-  let output: string | undefined;
-  let verbose = false;
-  let split = false;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--input") {
-      const next = argv[i + 1];
-      if (next === undefined) throw new Error("--input requires a value");
-      input = next;
-      i++;
-    } else if (arg === "--output") {
-      const next = argv[i + 1];
-      if (next === undefined) throw new Error("--output requires a value");
-      output = next;
-      i++;
-    } else if (arg === "--split") {
-      split = true;
-    } else if (arg === "-v" || arg === "--verbose") {
-      verbose = true;
-    } else if (arg === "-h" || arg === "--help") {
-      process.stdout.write(
-        "usage: tsx arc-to-vivaldi.ts [--input <path>] [--output <path>] [--split] [-v]\n" +
-          "  default output (combined): ./arc-bookmarks.html\n" +
-          "  with --split, --output is a directory (default: .) and files are\n" +
-          "    named arc-<slug>.html, one per Space.\n",
-      );
-      process.exit(0);
-    } else if (arg !== undefined) {
-      throw new Error(`unknown argument: ${arg}`);
-    }
-  }
-  return { input, output, verbose, split };
-}
 
 async function autoDiscoverInput(): Promise<string> {
   const localAppData = process.env["LOCALAPPDATA"];
@@ -381,6 +339,10 @@ function renderDocument(spaces: readonly SpaceConversion[]): string {
 
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.mode !== "html") {
+    process.stderr.write(`mode ${args.mode} not yet wired; see Task 7\n`);
+    return 0;
+  }
   const inputPath = args.input ?? (await autoDiscoverInput());
 
   let raw: string;
