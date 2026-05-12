@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "convert": "tsx arc-to-vivaldi.ts"
+    "convert": "tsx arc-to-vivaldi.ts",
+    "test": "tsx --test test/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
