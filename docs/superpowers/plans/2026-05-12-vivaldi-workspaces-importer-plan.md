@@ -954,7 +954,7 @@ Insert this block (verbatim) before the `## Notes` heading:
 
 The HTML import only covers bookmarks. If you also want Arc's Spaces to come
 across as real Vivaldi Workspaces with pinned and regular open tabs, there is
-a two-phase paste-into-DevTools workflow.
+a three-step paste-into-DevTools workflow.
 
 > Caveat: Vivaldi's Workspaces are not exposed through the public extension
 > API. This path uses the private `vivaldi.*` API surface available only

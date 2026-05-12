@@ -135,11 +135,17 @@ and its arguments instead.
 The CLI builds an in-memory representation already; the importer file embeds
 the relevant subset as JSON:
 
+**Implementation note (2026-05-12):** during implementation, `dryRun` was
+moved out of the embedded JSON payload and is now emitted as a top-level
+`const DRY_RUN = true|false;` constant in the rendered importer JS. It is a
+generation-time flag, not data, and embedding it in `ARC_DATA` would have
+mixed two different concerns at the same level. The data-model snippet below
+reflects what is actually embedded.
+
 ```ts
 interface InjectablePayload {
   readonly generatedAt: string;          // ISO timestamp
   readonly sourcePath: string;           // input file path (for traceability)
-  readonly dryRun: boolean;
   readonly spaces: readonly InjectableSpace[];
 }
 
