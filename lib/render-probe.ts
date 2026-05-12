@@ -47,18 +47,23 @@ export function renderProbeScript(): string {
           vivaldi.workspacesPrivate && vivaldi.workspacesPrivate.getAll && vivaldi.workspacesPrivate.getAll()],
       ];
 
+      const pending = [];
+
       for (const [name, fn] of readAttempts) {
         try {
           const r = fn();
           if (r && typeof r.then === "function") {
-            r.then((value) => {
-              result.workspacesProbe[name] = { ok: true, async: true, result: value };
-              console.log("[probe] " + name + " resolved:", value);
-            }, (err) => {
-              result.workspacesProbe[name] = { ok: false, async: true, error: String(err) };
-              console.log("[probe] " + name + " rejected:", err);
-            });
             result.workspacesProbe[name] = { ok: true, async: true, pending: true };
+            pending.push(
+              r.then(
+                (value) => {
+                  result.workspacesProbe[name] = { ok: true, async: true, result: value };
+                },
+                (err) => {
+                  result.workspacesProbe[name] = { ok: false, async: true, error: String(err) };
+                }
+              )
+            );
           } else {
             result.workspacesProbe[name] = { ok: true, async: false, result: r };
           }
@@ -66,12 +71,20 @@ export function renderProbeScript(): string {
           result.workspacesProbe[name] = { ok: false, error: String(e) };
         }
       }
+
+      // Wait for all async probes to settle before logging the final JSON,
+      // so the user can copy-paste a complete blob without stale pending entries.
+      Promise.allSettled(pending).then(() => {
+        console.log(JSON.stringify(result, null, 2));
+      });
+    } else {
+      console.log(JSON.stringify(result, null, 2));
     }
   } catch (e) {
     result.error = String(e);
+    console.log(JSON.stringify(result, null, 2));
   }
 
-  console.log(JSON.stringify(result, null, 2));
   return result;
 })();
 `;
