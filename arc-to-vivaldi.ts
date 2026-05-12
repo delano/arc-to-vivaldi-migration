@@ -339,6 +339,17 @@ function renderDocument(spaces: readonly SpaceConversion[]): string {
 
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    process.stdout.write(
+      "usage: tsx arc-to-vivaldi.ts [--input <path>] [--output <path>]\n" +
+        "                            [--split | --probe | --inject | --inject-dry-run]\n" +
+        "                            [-v]\n" +
+        "  HTML modes (default): --split is allowed.\n" +
+        "  JS payload modes: --probe, --inject, --inject-dry-run are mutually exclusive\n" +
+        "    and cannot be combined with --split.\n",
+    );
+    return 0;
+  }
   if (args.mode !== "html") {
     process.stderr.write(`mode ${args.mode} not yet wired; see Task 7\n`);
     return 0;

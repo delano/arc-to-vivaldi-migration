@@ -6,6 +6,7 @@ export interface CliArgs {
   readonly verbose: boolean;
   readonly split: boolean;
   readonly mode: CliMode;
+  readonly help: boolean;
 }
 
 export function parseArgs(argv: readonly string[]): CliArgs {
@@ -14,9 +15,10 @@ export function parseArgs(argv: readonly string[]): CliArgs {
   let verbose = false;
   let split = false;
   let mode: CliMode = "html";
+  let help = false;
 
   const setMode = (next: CliMode): void => {
-    if (mode !== "html" && mode !== next) {
+    if (mode !== "html") {
       throw new Error(
         `--probe, --inject and --inject-dry-run are mutually exclusive`,
       );
@@ -47,15 +49,8 @@ export function parseArgs(argv: readonly string[]): CliArgs {
     } else if (arg === "-v" || arg === "--verbose") {
       verbose = true;
     } else if (arg === "-h" || arg === "--help") {
-      process.stdout.write(
-        "usage: tsx arc-to-vivaldi.ts [--input <path>] [--output <path>]\n" +
-          "                            [--split | --probe | --inject | --inject-dry-run]\n" +
-          "                            [-v]\n" +
-          "  HTML modes (default): --split is allowed.\n" +
-          "  JS payload modes: --probe, --inject, --inject-dry-run are mutually exclusive\n" +
-          "    and cannot be combined with --split.\n",
-      );
-      process.exit(0);
+      help = true;
+      break;
     } else if (arg !== undefined) {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -65,5 +60,5 @@ export function parseArgs(argv: readonly string[]): CliArgs {
     throw new Error("--split only applies to HTML output, not JS payload modes");
   }
 
-  return { input, output, verbose, split, mode };
+  return { input, output, verbose, split, mode, help };
 }

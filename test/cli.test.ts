@@ -9,6 +9,7 @@ test("parseArgs: defaults", () => {
     verbose: false,
     split: false,
     mode: "html",
+    help: false,
   });
 });
 
@@ -36,4 +37,22 @@ test("parseArgs: --output combines with --inject", () => {
   const args = parseArgs(["--inject", "--output", "x.js"]);
   strictEqual(args.mode, "inject");
   strictEqual(args.output, "x.js");
+});
+
+test("parseArgs: --help sets help flag without exiting", () => {
+  const args = parseArgs(["--help"]);
+  strictEqual(args.help, true);
+});
+
+test("parseArgs: -h sets help flag without exiting", () => {
+  const args = parseArgs(["-h"]);
+  strictEqual(args.help, true);
+});
+
+test("parseArgs: --inject + --inject (duplicate) is a conflict", () => {
+  throws(() => parseArgs(["--inject", "--inject"]), /mutually exclusive/);
+});
+
+test("parseArgs: --inject + --split is also a conflict (reverse order)", () => {
+  throws(() => parseArgs(["--inject", "--split"]), /split.*only applies/i);
 });
