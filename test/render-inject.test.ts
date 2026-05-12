@@ -1,5 +1,5 @@
 import { test } from "node:test";
-import { ok, match } from "node:assert";
+import { ok, match, deepStrictEqual } from "node:assert";
 import { renderInjectScript } from "../lib/render-inject.js";
 import type { InjectablePayload } from "../lib/types.js";
 
@@ -25,6 +25,8 @@ test("renderInjectScript: embeds ARC_DATA literal", () => {
 test("renderInjectScript: dryRun flag is honoured", () => {
   const dry = renderInjectScript(sample, { dryRun: true });
   match(dry, /const DRY_RUN = true;/);
+  ok(dry.includes("DRY: createWorkspace"));
+  ok(dry.includes("DRY: createTab"));
   const wet = renderInjectScript(sample, { dryRun: false });
   match(wet, /const DRY_RUN = false;/);
 });
@@ -44,4 +46,12 @@ test("renderInjectScript: is a self-invoking async IIFE", () => {
   const src = renderInjectScript(sample, { dryRun: false });
   match(src, /\(async \(\) => \{/);
   match(src, /\}\)\(\);\s*$/);
+});
+
+test("renderInjectScript: ARC_DATA parses back to the original payload", () => {
+  const src = renderInjectScript(sample, { dryRun: false });
+  const m = src.match(/const ARC_DATA = ([\s\S]+?);\nconst DRY_RUN/);
+  ok(m && m[1], "ARC_DATA block not found");
+  const parsed = JSON.parse(m![1]!);
+  deepStrictEqual(parsed, sample);
 });

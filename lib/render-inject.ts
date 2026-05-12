@@ -46,13 +46,13 @@ const DRY_RUN = ${dryRunLiteral};
     return result;
   };
 
-  const createTab = async (url, opts) => {
-    const tabOpts = { url, active: false, pinned: !!opts.pinned };
-    if (opts.workspaceId !== undefined) {
-      tabOpts.vivExtData = { workspaceId: opts.workspaceId };
+  const createTab = async (url, tabOpts) => {
+    const chromeOpts = { url, active: false, pinned: !!tabOpts.pinned };
+    if (tabOpts.workspaceId !== undefined) {
+      chromeOpts.vivExtData = { workspaceId: tabOpts.workspaceId };
     }
-    if (DRY_RUN) { log("DRY: createTab", tabOpts); return { id: -1 }; }
-    return await chrome.tabs.create(tabOpts);
+    if (DRY_RUN) { log("DRY: createTab", chromeOpts); return { id: -1 }; }
+    return await chrome.tabs.create(chromeOpts);
   };
 
   const summary = { spaces: 0, pinned: 0, unpinned: 0, failures: [] };
@@ -70,6 +70,7 @@ const DRY_RUN = ${dryRunLiteral};
     summary.spaces++;
     const workspaceId = ws && (ws.id ?? ws.workspaceId);
 
+    const pinnedBefore = summary.pinned;
     for (let i = 0; i < space.pinned.length; i++) {
       const tab = space.pinned[i];
       try {
@@ -80,8 +81,9 @@ const DRY_RUN = ${dryRunLiteral};
         log("  pinned tab failed:", tab.url, err);
       }
     }
-    log("  pinned " + summary.pinned + "/" + space.pinned.length);
+    log("  pinned " + (summary.pinned - pinnedBefore) + "/" + space.pinned.length);
 
+    const unpinnedBefore = summary.unpinned;
     for (let i = 0; i < space.unpinned.length; i++) {
       const tab = space.unpinned[i];
       try {
@@ -92,7 +94,7 @@ const DRY_RUN = ${dryRunLiteral};
         log("  unpinned tab failed:", tab.url, err);
       }
     }
-    log("  unpinned " + summary.unpinned + "/" + space.unpinned.length);
+    log("  unpinned " + (summary.unpinned - unpinnedBefore) + "/" + space.unpinned.length);
   }
 
   log("DONE", summary);
