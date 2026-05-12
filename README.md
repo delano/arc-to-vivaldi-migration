@@ -61,12 +61,68 @@ Flags:
 | `--split`         | One file per Space, named `arc-<slug>.html`.                              |
 | `-v`, `--verbose` | Print a per-Space breakdown.                                              |
 | `-h`, `--help`    | Print usage.                                                              |
+| `--probe`              | Emit `probe-vivaldi.js` for Vivaldi private-API discovery. See "Experimental" section below. |
+| `--inject`             | Emit `vivaldi-import.js` — a paste-able importer that creates Vivaldi Workspaces from your Arc Spaces. |
+| `--inject-dry-run`     | Same as `--inject` but logs intended API calls instead of making them.                    |
 
 ## Importing into Vivaldi
 
 `Vivaldi menu → File → Import Bookmarks and Settings…` → choose **Bookmarks
 HTML File** and point it at the generated file. Each Space becomes a top-level
 folder containing `Pinned` and `Unpinned` subfolders, mirroring Arc's layout.
+
+## Experimental: recreate Arc Spaces as Vivaldi Workspaces
+
+The HTML import only covers bookmarks. If you also want Arc's Spaces to come
+across as real Vivaldi Workspaces with pinned and regular open tabs, there is
+a three-step paste-into-DevTools workflow.
+
+> Caveat: Vivaldi's Workspaces are not exposed through the public extension
+> API. This path uses the private `vivaldi.*` API surface available only
+> inside Vivaldi's own UI context. It can break across Vivaldi versions.
+> Your HTML bookmarks are unaffected either way.
+
+**1. Probe Vivaldi's private API.**
+
+```bash
+npx tsx arc-to-vivaldi.ts --probe
+```
+
+Open Vivaldi → `chrome://inspect/#apps` → click `inspect` next to `window.html`.
+In the DevTools console that opens, paste the contents of `probe-vivaldi.js`.
+A JSON blob is printed describing the actual API surface — useful if a
+future Vivaldi version moves things around and the importer needs adjusting.
+
+**2. Dry-run the importer.**
+
+```bash
+npx tsx arc-to-vivaldi.ts --inject-dry-run
+```
+
+Paste `vivaldi-import.js` into the same DevTools console. It logs every
+Workspace and tab it *would* create, without making any changes.
+
+**3. Run for real.**
+
+```bash
+npx tsx arc-to-vivaldi.ts --inject
+```
+
+Re-running `--inject` (without `--inject-dry-run`) regenerates `vivaldi-import.js`
+with the dry-run guard disabled. Paste the regenerated file into the same DevTools
+console. The script creates one Workspace per Arc Space, populates it with your
+Arc-pinned tabs as pinned tabs and your Arc-unpinned tabs as regular tabs
+(flat — folder structure inside the Unpinned column is dropped, since Vivaldi
+tabs do not nest).
+
+Mapping summary:
+
+| Arc | Vivaldi |
+| --- | --- |
+| Space | Workspace |
+| Pinned column | Pinned tabs in the Workspace |
+| Unpinned column (flattened) | Regular tabs in the Workspace |
+| Folder hierarchy inside columns | Lost (still preserved in the HTML import) |
 
 ## Notes
 

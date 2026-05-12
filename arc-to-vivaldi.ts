@@ -11,65 +11,18 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 
-// ---------- Arc JSON shapes (narrowed at the boundary; never `any`). ----------
-
-interface ArcSpaceIconType {
-  readonly icon: string | undefined;
-}
-
-interface ArcSpaceCustomInfo {
-  readonly iconType: ArcSpaceIconType | undefined;
-}
-
-interface ArcSpace {
-  readonly id: string;
-  readonly title: string;
-  readonly customInfo: ArcSpaceCustomInfo | undefined;
-  readonly newContainerIDs: readonly unknown[];
-}
-
-interface ArcTabData {
-  readonly savedURL: string | undefined;
-  readonly savedTitle: string | undefined;
-}
-
-interface ArcItemData {
-  readonly tab: ArcTabData | undefined;
-  readonly isList: boolean;
-}
-
-interface ArcItem {
-  readonly id: string;
-  readonly title: string | null;
-  readonly parentID: string | undefined;
-  readonly childrenIds: readonly string[];
-  readonly data: ArcItemData;
-}
-
-// ---------- Internal output tree ----------
-
-interface BookmarkLeaf {
-  readonly kind: "leaf";
-  readonly title: string;
-  readonly url: string;
-}
-
-interface BookmarkFolder {
-  readonly kind: "folder";
-  readonly title: string;
-  readonly children: readonly BookmarkNode[];
-}
-
-type BookmarkNode = BookmarkLeaf | BookmarkFolder;
-
-interface SpaceConversion {
-  readonly title: string;
-  readonly iconHint: string | undefined;
-  readonly pinned: readonly BookmarkNode[];
-  readonly unpinned: readonly BookmarkNode[];
-  readonly bookmarkCount: number;
-  readonly folderCount: number;
-}
+import type {
+  ArcSpace,
+  ArcSpaceCustomInfo,
+  ArcItem,
+  ArcTabData,
+  BookmarkNode,
+  SpaceConversion,
+} from "./lib/types.js";
+import { parseArgs } from "./lib/cli.js";
+import { buildInjectablePayload } from "./lib/payload.js";
+import { renderProbeScript } from "./lib/render-probe.js";
+import { renderInjectScript } from "./lib/render-inject.js";
 
 // ---------- Helpers ----------
 
@@ -118,49 +71,6 @@ function uniqueSlug(base: string, taken: Set<string>): string {
 }
 
 // ---------- CLI ----------
-
-interface CliArgs {
-  readonly input: string | undefined;
-  readonly output: string | undefined;
-  readonly verbose: boolean;
-  readonly split: boolean;
-}
-
-function parseArgs(argv: readonly string[]): CliArgs {
-  let input: string | undefined;
-  let output: string | undefined;
-  let verbose = false;
-  let split = false;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--input") {
-      const next = argv[i + 1];
-      if (next === undefined) throw new Error("--input requires a value");
-      input = next;
-      i++;
-    } else if (arg === "--output") {
-      const next = argv[i + 1];
-      if (next === undefined) throw new Error("--output requires a value");
-      output = next;
-      i++;
-    } else if (arg === "--split") {
-      split = true;
-    } else if (arg === "-v" || arg === "--verbose") {
-      verbose = true;
-    } else if (arg === "-h" || arg === "--help") {
-      process.stdout.write(
-        "usage: tsx arc-to-vivaldi.ts [--input <path>] [--output <path>] [--split] [-v]\n" +
-          "  default output (combined): ./arc-bookmarks.html\n" +
-          "  with --split, --output is a directory (default: .) and files are\n" +
-          "    named arc-<slug>.html, one per Space.\n",
-      );
-      process.exit(0);
-    } else if (arg !== undefined) {
-      throw new Error(`unknown argument: ${arg}`);
-    }
-  }
-  return { input, output, verbose, split };
-}
 
 async function autoDiscoverInput(): Promise<string> {
   const localAppData = process.env["LOCALAPPDATA"];
@@ -432,6 +342,27 @@ function renderDocument(spaces: readonly SpaceConversion[]): string {
 
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    process.stdout.write(
+      "usage: tsx arc-to-vivaldi.ts [--input <path>] [--output <path>]\n" +
+        "                            [--split | --probe | --inject | --inject-dry-run]\n" +
+        "                            [-v]\n" +
+        "  HTML modes (default): --split is allowed.\n" +
+        "  JS payload modes: --probe, --inject, --inject-dry-run are mutually exclusive\n" +
+        "    and cannot be combined with --split.\n",
+    );
+    return 0;
+  }
+  if (args.mode === "probe") {
+    const outPath = args.output ?? "./probe-vivaldi.js";
+    await writeFile(outPath, renderProbeScript(), "utf8");
+    process.stderr.write(
+      `probe script written to ${outPath}\n` +
+        `paste it into Vivaldi's internal DevTools (chrome://inspect/#apps -> click 'inspect' next to window.html)\n`,
+    );
+    return 0;
+  }
+
   const inputPath = args.input ?? (await autoDiscoverInput());
 
   let raw: string;
@@ -486,6 +417,29 @@ async function main(): Promise<number> {
     totalFolders += stats.folders;
   }
 
+  if (args.mode === "inject" || args.mode === "inject-dry-run") {
+    const outPath = args.output ?? "./vivaldi-import.js";
+    const payload = buildInjectablePayload(conversions, {
+      sourcePath: inputPath,
+      now: new Date(),
+    });
+    const script = renderInjectScript(payload, {
+      dryRun: args.mode === "inject-dry-run",
+    });
+    const totalTabs = payload.spaces.reduce(
+      (acc, s) => acc + s.pinned.length + s.unpinned.length,
+      0,
+    );
+    await writeFile(outPath, script, "utf8");
+    process.stderr.write(
+      `${payload.spaces.length} spaces, ${totalTabs} tabs embedded in ${outPath}` +
+        (args.mode === "inject-dry-run" ? " (dry-run mode)" : "") +
+        "\n",
+    );
+    return 0;
+  }
+
+  // args.mode === "html" — existing behaviour below.
   const writtenPaths: string[] = [];
   if (args.split) {
     const outDir = args.output ?? ".";
