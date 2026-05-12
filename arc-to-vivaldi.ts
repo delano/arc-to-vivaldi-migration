@@ -20,6 +20,9 @@ import type {
   SpaceConversion,
 } from "./lib/types.js";
 import { parseArgs } from "./lib/cli.js";
+import { buildInjectablePayload } from "./lib/payload.js";
+import { renderProbeScript } from "./lib/render-probe.js";
+import { renderInjectScript } from "./lib/render-inject.js";
 
 // ---------- Helpers ----------
 
@@ -350,10 +353,6 @@ async function main(): Promise<number> {
     );
     return 0;
   }
-  if (args.mode !== "html") {
-    process.stderr.write(`mode ${args.mode} not yet wired; see Task 7\n`);
-    return 0;
-  }
   const inputPath = args.input ?? (await autoDiscoverInput());
 
   let raw: string;
@@ -408,6 +407,39 @@ async function main(): Promise<number> {
     totalFolders += stats.folders;
   }
 
+  if (args.mode === "probe") {
+    const outPath = args.output ?? "./probe-vivaldi.js";
+    await writeFile(outPath, renderProbeScript(), "utf8");
+    process.stderr.write(
+      `probe script written to ${outPath}\n` +
+        `paste it into Vivaldi's internal DevTools (chrome://inspect/#apps -> window.html)\n`,
+    );
+    return 0;
+  }
+
+  if (args.mode === "inject" || args.mode === "inject-dry-run") {
+    const outPath = args.output ?? "./vivaldi-import.js";
+    const payload = buildInjectablePayload(conversions, {
+      sourcePath: inputPath,
+      now: new Date(),
+    });
+    const script = renderInjectScript(payload, {
+      dryRun: args.mode === "inject-dry-run",
+    });
+    await writeFile(outPath, script, "utf8");
+    const totalTabs = payload.spaces.reduce(
+      (acc, s) => acc + s.pinned.length + s.unpinned.length,
+      0,
+    );
+    process.stderr.write(
+      `${payload.spaces.length} spaces, ${totalTabs} tabs embedded in ${outPath}` +
+        (args.mode === "inject-dry-run" ? " (dry-run mode)" : "") +
+        "\n",
+    );
+    return 0;
+  }
+
+  // args.mode === "html" — existing behaviour below.
   const writtenPaths: string[] = [];
   if (args.split) {
     const outDir = args.output ?? ".";
