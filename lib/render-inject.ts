@@ -36,18 +36,24 @@ export function renderInjectScript(
 //     workspaces during the import or the visual flicker gets ugly
 //     (the assignment is still correct via metadata).
 //
-// After each create+update we also call chrome.tabs.discard to release
-// the tab's renderer immediately. Without this, Vivaldi tries to fully
-// load every newly created tab, and 300+ concurrent loads will eat all
-// your memory and freeze the system. With discard, the tab stays in the
-// workspace with its URL intact but is unloaded — same as Arc's
-// always-pinned tabs behave by default.
+// After each create+update we schedule a DEFERRED chrome.tabs.discard
+// (DISCARD_DELAY_MS later). The discard releases the renderer to free
+// memory, but the delay is critical: Chromium only persists discarded
+// tabs to the session file if the tab reached a "committed" navigation
+// state first. Discarding immediately after create skipped that
+// commit, and on Vivaldi restart the tabs vanished. The deferral gives
+// Vivaldi time to commit the navigation before we tear down the
+// renderer. At peak, roughly DISCARD_DELAY_MS / THROTTLE_MS concurrent
+// loads are in flight — bounded and manageable.
 //
 // If your machine still struggles, increase THROTTLE_MS below.
+// If imported tabs disappear after a Vivaldi restart, increase
+// DISCARD_DELAY_MS.
 
 const ARC_DATA = ${dataLiteral};
 const DRY_RUN = ${dryRunLiteral};
 const THROTTLE_MS = 100;
+const DISCARD_DELAY_MS = 1000;
 
 (async () => {
   const log = (...args) => console.log("[arc->vivaldi]", ...args);
@@ -114,19 +120,22 @@ const THROTTLE_MS = 100;
 
   const summary = { spaces: 0, pinned: 0, unpinned: 0, failures: [] };
 
-  // Each tab: create (lands in active workspace, possibly with the wrong
-  // pinned state since Vivaldi drops create-time options under load), then
-  // chrome.tabs.update to overwrite BOTH vivExtData.workspaceId and the
-  // pinned flag. Update is the call Vivaldi reliably honours. Finally,
-  // discard the tab to release its renderer — without this, 300+ tabs
-  // loading concurrently will freeze the system.
+  // Each tab: create + immediate update (assigns workspace + pinned
+  // state, both of which Vivaldi drops at create time but honours via
+  // update). Then SCHEDULE a deferred discard — see the header comment
+  // for why the deferral matters for session persistence. The discard
+  // promise is collected so the caller can await them all before
+  // declaring the import done.
+  const pendingDiscards = [];
   const createAndAssign = async (url, pinned, workspaceId) => {
     const created = await createTab({ url, active: false, pinned });
     await updateTab(created.id, {
       vivExtData: JSON.stringify({ workspaceId }),
       pinned,
     });
-    await discardTab(created.id);
+    pendingDiscards.push(new Promise((res) => {
+      setTimeout(async () => { await discardTab(created.id); res(); }, DISCARD_DELAY_MS);
+    }));
     return created;
   };
 
@@ -171,6 +180,16 @@ const THROTTLE_MS = 100;
       }
     }
     log("  unpinned " + (summary.unpinned - unpinnedBefore) + "/" + space.unpinned.length);
+  }
+
+  // Wait for all scheduled discards to fire before declaring done. This
+  // matters: if the script returns while discards are still pending,
+  // they fire in the background; if the user closes Vivaldi in that
+  // window, some tabs may not have been discarded yet (a memory issue,
+  // not a correctness issue — but worth waiting the few seconds).
+  if (pendingDiscards.length > 0) {
+    log("waiting for " + pendingDiscards.length + " pending discards to settle...");
+    await Promise.all(pendingDiscards);
   }
 
   log("DONE", summary);
