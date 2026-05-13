@@ -25,21 +25,50 @@ test("renderInjectScript: embeds ARC_DATA literal", () => {
 test("renderInjectScript: dryRun flag is honoured", () => {
   const dry = renderInjectScript(sample, { dryRun: true });
   match(dry, /const DRY_RUN = true;/);
-  ok(dry.includes("DRY: createWorkspace"));
-  ok(dry.includes("DRY: createTab"));
+  ok(dry.includes("DRY: createAndAssign"));
   const wet = renderInjectScript(sample, { dryRun: false });
   match(wet, /const DRY_RUN = false;/);
 });
 
-test("renderInjectScript: references the expected private API names", () => {
+test("renderInjectScript: references the expected private API surface", () => {
   const src = renderInjectScript(sample, { dryRun: false });
   for (const name of [
-    "vivaldi.workspaces",
+    "vivaldi.prefs.get",
+    "vivaldi.workspaces.list",
     "chrome.tabs.create",
-    "pinned: true",
+    "chrome.tabs.update",
+    "vivExtData",
+    "THROTTLE_MS",
   ]) {
     ok(src.includes(name), "expected output to mention " + name);
   }
+});
+
+test("renderInjectScript: uses create-then-update to assign workspace", () => {
+  const src = renderInjectScript(sample, { dryRun: false });
+  ok(src.includes("createAndAssign"), "expected create+update helper named createAndAssign");
+  // The create call must NOT include vivExtData (Vivaldi ignores it under load),
+  // and assignment must happen via a subsequent chrome.tabs.update.
+  const createMatch = src.match(/createTab\(\{[^}]+\}\)/);
+  ok(createMatch, "expected a createTab call");
+  ok(!createMatch![0].includes("vivExtData"), "create call must NOT include vivExtData — it is ignored at create time");
+});
+
+test("renderInjectScript: discards each tab after assignment to spare resources", () => {
+  const src = renderInjectScript(sample, { dryRun: false });
+  ok(src.includes("chrome.tabs.discard"), "expected chrome.tabs.discard call to release renderers");
+  ok(src.includes("discardTab"), "expected a discardTab helper");
+});
+
+test("renderInjectScript: does NOT mutate the workspaces.list pref", () => {
+  const src = renderInjectScript(sample, { dryRun: false });
+  ok(!src.includes("vivaldi.prefs.set"), "inject must not write the workspaces pref — user owns it now");
+});
+
+test("renderInjectScript: instructs the user to pre-create workspaces in Vivaldi", () => {
+  const src = renderInjectScript(sample, { dryRun: false });
+  ok(src.includes("PREREQUISITE"), "expected prereq comment");
+  ok(src.includes("Missing Vivaldi Workspaces"), "expected runtime error referencing missing workspace names");
 });
 
 test("renderInjectScript: is a self-invoking async IIFE", () => {
