@@ -14,13 +14,21 @@ import type { BookmarkNode, SpaceConversion } from "./types.js";
 //
 // HARD PRIVACY CONSTRAINT (unchanged): the output makes ZERO third-party
 // requests when opened. No favicon services, no web fonts, no CDNs. Site icons
-// are offline monogram tiles. The DOM is built with createElement/textContent
-// (never innerHTML), so bookmark data can't inject markup. Outbound links carry
-// rel="noreferrer". The only network activity is the user clicking a link.
+// are offline monogram tiles by default; with --favicons they become real
+// favicons EMBEDDED as base64 data: URIs (fetched at generation time, never at
+// open time), so the zero-request guarantee still holds. The DOM is built with
+// createElement/textContent (never innerHTML) and icons are set as CSS
+// background-image (never a literal <img>/src= reaching a network URL), so
+// bookmark data can't inject markup or smuggle in an external request. Outbound
+// links carry rel="noreferrer". The only network activity is a clicked link.
 
 export interface RenderPageOptions {
   readonly generatedAt: string;
   readonly title?: string;
+  // Per-host favicons, keyed by hostname (see favicons.hostOf), fetched at
+  // GENERATION time and embedded as data: URIs. Absent unless --favicons was
+  // passed. buildWirePayload keeps only the hosts that actually appear here.
+  readonly icons?: ReadonlyMap<string, string>;
 }
 
 // ---------- escaping (server-side, for the tiny static shell only) ----------
@@ -127,6 +135,9 @@ export interface WirePayload {
   // localStorage working tree. NOT content-derived, so a user's edits survive
   // re-exporting from Arc into a freshly generated file of the same title.
   readonly docId: string;
+  // host -> base64 data: URI favicon, deduped across every space. Empty `{}`
+  // when --favicons was not used; the page then renders monogram tiles.
+  readonly icons: Record<string, string>;
   readonly spaces: readonly WireSpace[];
 }
 
@@ -138,17 +149,58 @@ function toWireNode(n: BookmarkNode): WireNode {
   return { t: "folder", title: n.title, children: n.children.map(toWireNode) };
 }
 
+// Hostname without a leading "www." — mirrors the client hostOf so embedded
+// icons (keyed by host) are looked up by the same key in-page.
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+// Every host that appears as a leaf anywhere in a Space, so we embed only the
+// icons a given document actually needs (matters for --split's per-file output).
+function collectHosts(spaces: readonly SpaceConversion[], into: Set<string>): void {
+  const walk = (nodes: readonly BookmarkNode[]): void => {
+    for (const n of nodes) {
+      if (n.kind === "leaf") {
+        const h = hostOf(n.url);
+        if (h) into.add(h);
+      } else {
+        walk(n.children);
+      }
+    }
+  };
+  for (const s of spaces) {
+    walk(s.pinned);
+    walk(s.unpinned);
+    if (s.favorites) walk(s.favorites);
+  }
+}
+
 export function buildWirePayload(
   spaces: readonly SpaceConversion[],
   opts: RenderPageOptions,
 ): WirePayload {
   const title = opts.title ?? "SpArca";
   const docId = `${slugify(title)}-${shortHash(spaces.map((s) => s.title).join("\n"))}`;
+  // Keep only the icons whose host is present in these spaces (deduped).
+  const icons: Record<string, string> = {};
+  if (opts.icons && opts.icons.size > 0) {
+    const hosts = new Set<string>();
+    collectHosts(spaces, hosts);
+    for (const host of hosts) {
+      const uri = opts.icons.get(host);
+      if (uri !== undefined) icons[host] = uri;
+    }
+  }
   return {
     v: 1,
     title,
     generatedAt: opts.generatedAt,
     docId,
+    icons,
     spaces: spaces.map((sp, i) => ({
       id: `sp-${i}`,
       title: sp.title,
@@ -266,6 +318,9 @@ body{
 }
 .mini:hover{border-color:var(--muted)}
 .mini.on{background:var(--accent2); border-color:var(--accent2); color:#fff;}
+/* The long/wide toggle is only meaningful while all Spaces are shown. */
+.layout-btn{display:none;}
+body.allspaces .layout-btn{display:inline-block;}
 .legend{font-size:10.5px; color:var(--muted); line-height:1.5;}
 .legend-h{text-transform:uppercase; letter-spacing:.06em; font-size:9px; opacity:.7; margin:2px 0 3px;}
 .legend-row{display:flex; align-items:baseline; gap:5px; margin:1.5px 0;}
@@ -286,6 +341,12 @@ body{
 .space.active{display:block}
 body.searching .space{display:block}
 body.allspaces .space{display:block; margin-bottom:30px;}
+/* Wrapper is transparent in long/single view; becomes a horizontal flex row of
+   fixed-width columns in the "wide" all-spaces layout (one row, N columns). */
+.spacewrap{display:contents;}
+body.allspaces.wide .content{overflow:auto;}
+body.allspaces.wide .spacewrap{display:flex; gap:24px; width:max-content; align-items:flex-start; padding-bottom:8px;}
+body.allspaces.wide .space{flex:0 0 340px; width:340px; max-width:340px; margin:0;}
 
 .banner{
   display:flex; align-items:center; gap:14px; padding:20px 22px; border-radius:16px;
@@ -355,6 +416,9 @@ a.link .t{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   background:hsl(var(--h) 55% 52%);
 }
 a.tile .fav{width:30px; height:30px; border-radius:8px; font-size:15px;}
+/* Embedded favicon (data: URI set inline as background-image). #fff backing so
+   transparent icons read on dark; the gradient/monogram are replaced. */
+.fav.hasicon{background:#fff center/contain no-repeat; color:transparent;}
 
 .rm{
   position:absolute; top:4px; right:4px; width:18px; height:18px; line-height:16px;
@@ -419,6 +483,7 @@ const SCRIPT = `
   var NS = 'arc:' + DATA.docId;
   var KEY_TREE = NS + ':tree';
   var KEY_ACTIVE = NS + ':active';
+  var KEY_LAYOUT = NS + ':layout';
 
   // ---- storage helpers (file:// localStorage works in Chromium/Vivaldi) ----
   function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
@@ -435,6 +500,15 @@ const SCRIPT = `
   // reload. Depth-capped so a pathologically deep imported tree can't blow the
   // stack here or in the render/count recursions downstream.
   function validColor(c){ return typeof c==='string' && (/^#[0-9a-f]{3,8}$/i.test(c) || /^(?:hsl|rgb)a?\\([0-9 ,.%\\/]+\\)$/i.test(c)); }
+  // Embedded favicons are base64 image data: URIs only. An imported/edited tree
+  // is untrusted, so every icon is validated before it reaches a style sink; the
+  // base64 alphabet excludes the chars that could break out of a CSS url("...").
+  var ICON_RE = /^data:image\\/(?:png|jpe?g|gif|webp|x-icon|vnd\\.microsoft\\.icon|svg\\+xml);base64,[A-Za-z0-9+\\/=]+$/;
+  function validIcons(m){
+    if(typeof m!=='object' || m===null || Array.isArray(m)) return false;
+    for(var k in m){ if(!Object.prototype.hasOwnProperty.call(m,k)) continue; var v=m[k]; if(typeof v!=='string' || v.length>262144 || !ICON_RE.test(v)) return false; }
+    return true;
+  }
   function validNode(n, depth){
     if(!n || depth>100) return false;
     if(n.t==='leaf') return typeof n.url==='string' && typeof n.title==='string';
@@ -465,11 +539,14 @@ const SCRIPT = `
       for(var p=0;p<s.pinned.length;p++){ if(!validNode(s.pinned[p], 0)) return false; }
       for(var u=0;u<s.unpinned.length;u++){ if(!validNode(s.unpinned[u], 0)) return false; }
     }
+    // icons is optional (older exports / --favicons not used); when present it
+    // must be a flat map of host -> base64 image data: URI.
+    if(t.icons!==undefined && !validIcons(t.icons)) return false;
     return true;
   }
   // Backfill a favorites array onto any Space that lacks one, so the rest of the
   // app can treat it as always-present (older imports, hand-edited files).
-  function normTree(t){ for(var i=0;i<t.spaces.length;i++){ if(!Array.isArray(t.spaces[i].favorites)) t.spaces[i].favorites=[]; } return t; }
+  function normTree(t){ if(!t.icons || typeof t.icons!=='object' || Array.isArray(t.icons)) t.icons={}; for(var i=0;i<t.spaces.length;i++){ if(!Array.isArray(t.spaces[i].favorites)) t.spaces[i].favorites=[]; } return t; }
   var working = loadWorking();
   function loadWorking(){
     var raw = lsGet(KEY_TREE);
@@ -506,9 +583,20 @@ const SCRIPT = `
   function hashHue(s){ var h=0; for(var i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return h%360; }
 
   function el(tag, cls, txt){ var e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; return e; }
-  function favTile(seed, label){
-    var s = el('span', 'fav', monogram(label));
-    s.style.setProperty('--h', hashHue(seed || label));
+  // host doubles as the icon-map key and the hue seed. With --favicons the
+  // embedded data: URI (validated by validIcons) is painted as a CSS background;
+  // otherwise we fall back to the offline monogram tile.
+  function favTile(host, label){
+    var s = el('span', 'fav');
+    var uri = (host && working.icons) ? working.icons[host] : null;
+    if(uri){
+      s.className = 'fav hasicon';
+      s.style.backgroundImage = 'url("' + uri + '")';
+      s.setAttribute('aria-hidden', 'true');
+    } else {
+      s.textContent = monogram(label);
+      s.style.setProperty('--h', hashHue(host || label));
+    }
     return s;
   }
 
@@ -730,9 +818,10 @@ const SCRIPT = `
   // ---- content build ----
   var content = document.getElementById('content');
   var sidebar = document.getElementById('sidebar');
-  var q, count, nav, allBtn;
+  var q, count, nav, allBtn, expBtn, impBtn, resetBtn, layoutBtn;
   var activeId = lsGet(KEY_ACTIVE);
   var fullView = false;
+  var wide = lsGet(KEY_LAYOUT) === 'wide';
 
   function activeSpace(){ for(var i=0;i<working.spaces.length;i++){ if(working.spaces[i].id===activeId) return working.spaces[i]; } return working.spaces[0]; }
 
@@ -741,6 +830,7 @@ const SCRIPT = `
     if(storageFailed) content.appendChild(buildStorageWarn());
     if(staleNeeded()) content.appendChild(buildStaleBar());
     if(!working.spaces.length){ content.appendChild(el('p','emptydoc','No Spaces with bookmarks were found.')); return; }
+    var wrap = el('div','spacewrap');
     for(var s=0;s<working.spaces.length;s++){
       var sp = working.spaces[s];
       var sec = el('section','space'); sec.id = sp.id;
@@ -763,8 +853,9 @@ const SCRIPT = `
       var list = el('div'); renderInto(list, sp.unpinned); makeContainerDrop(list, sp.unpinned); gu.appendChild(list);
       sec.appendChild(gu);
 
-      content.appendChild(sec);
+      wrap.appendChild(sec);
     }
+    content.appendChild(wrap);
     applyActive();
   }
 
@@ -819,10 +910,11 @@ const SCRIPT = `
     var foot = el('div','foot');
     var actions = el('div','actions');
     allBtn = el('button','mini','Show all'); allBtn.addEventListener('click', toggleFull); actions.appendChild(allBtn);
-    var exp = el('button','mini','Export'); exp.addEventListener('click', exportJson); actions.appendChild(exp);
-    var imp = el('button','mini','Import'); var file = el('input'); file.type='file'; file.accept='application/json,.json'; file.style.display='none';
-    imp.addEventListener('click', function(){ file.click(); }); file.addEventListener('change', importJson); actions.appendChild(imp); actions.appendChild(file);
-    var reset = el('button','mini','Reset'); reset.addEventListener('click', resetAll); actions.appendChild(reset);
+    layoutBtn = el('button','mini layout-btn'); layoutBtn.type='button'; layoutBtn.addEventListener('click', toggleWide); actions.appendChild(layoutBtn);
+    expBtn = el('button','mini','Export'); expBtn.addEventListener('click', exportJson); actions.appendChild(expBtn);
+    impBtn = el('button','mini','Import'); var file = el('input'); file.type='file'; file.accept='application/json,.json'; file.style.display='none';
+    impBtn.addEventListener('click', function(){ file.click(); }); file.addEventListener('change', importJson); actions.appendChild(impBtn); actions.appendChild(file);
+    resetBtn = el('button','mini','Reset'); resetBtn.addEventListener('click', resetAll); actions.appendChild(resetBtn);
     foot.appendChild(actions);
     var legend = el('div','legend');
     legend.appendChild(el('div','legend-h','Shortcuts'));
@@ -833,6 +925,7 @@ const SCRIPT = `
       [['\\u23250'], 'Show all Spaces'],
       [['\\u2191\\u2193'], 'Move focus'],
       [['\\u2190\\u2192'], 'Prev/next Space'],
+      [['Tab'], 'Cycle Spaces / actions'],
       [['Paste','Drop'], 'Add a link']
     ];
     for(var ci=0; ci<cheats.length; ci++){
@@ -880,6 +973,10 @@ const SCRIPT = `
     else { content.scrollTop = 0; }
   }
   function toggleFull(){ fullView=!fullView; document.body.classList.toggle('allspaces', fullView); allBtn.classList.toggle('on', fullView); allBtn.textContent = fullView ? 'Show one' : 'Show all'; if(fullView){ var sec=document.getElementById(activeId); if(sec) sec.scrollIntoView({block:'start'}); } }
+  // Long (stacked, the default) vs wide (each Space a column, one row). Only has
+  // a visible effect in the all-Spaces view; the choice persists across reloads.
+  function applyLayout(){ document.body.classList.toggle('wide', wide); if(layoutBtn){ layoutBtn.textContent = wide ? 'Long' : 'Wide'; layoutBtn.classList.toggle('on', wide); } }
+  function toggleWide(){ wide=!wide; lsSet(KEY_LAYOUT, wide ? 'wide' : 'long'); applyLayout(); var sec=document.getElementById(activeId); if(sec) sec.scrollIntoView({block:'nearest', inline:'start'}); }
 
   // ---- roving keyboard navigation (\\u2191\\u2193 between links, \\u2190\\u2192 between Spaces) ----
   // Drives both the single-Space and the all-Spaces ("Show all") vertical view.
@@ -905,7 +1002,15 @@ const SCRIPT = `
     setRove(list[ni]);
   }
   function spaceIndex(id){ for(var i=0;i<working.spaces.length;i++){ if(working.spaces[i].id===id) return i; } return -1; }
-  function firstFocusable(sec){ return sec.querySelector('a.favtile, a.tile, a.link, details.folder>summary'); }
+  // First focusable that is actually on screen: skip search-hidden links (.miss)
+  // and anything in a collapsed folder / hidden Space (offsetParent===null), the
+  // same filter focusList() uses. Otherwise Tab / arrow-Space could land focus on
+  // a display:none element, moving it invisibly.
+  function firstFocusable(sec){
+    var all = sec.querySelectorAll('a.favtile, a.tile, a.link, details.folder>summary'), i;
+    for(i=0;i<all.length;i++){ if(all[i].classList.contains('miss')) continue; if(all[i].offsetParent===null) continue; return all[i]; }
+    return null;
+  }
   function closestSpace(e){ while(e && e!==content){ if(e.classList && e.classList.contains('space')) return e; e=e.parentNode; } return null; }
   function visibleSpaces(){ var secs=content.querySelectorAll('.space'), out=[], i; for(i=0;i<secs.length;i++){ if(secs[i].offsetParent!==null) out.push(secs[i]); } return out; }
   function roveSpace(dir){
@@ -923,6 +1028,45 @@ const SCRIPT = `
     var idx = Array.prototype.indexOf.call(vs, cur);
     var n2 = (idx<0 ? 0 : idx+dir); if(n2<0) n2=0; if(n2>=vs.length) n2=vs.length-1;
     var f2 = firstFocusable(vs[n2]); if(f2) setRove(f2); else vs[n2].scrollIntoView({block:'start'});
+  }
+
+  // ---- Tab cycle (coarse) ----
+  // search -> first link of each VISIBLE Space -> Show all -> [Wide] -> Export
+  // -> Import -> Reset -> back to search. Single view shows one Space, so its
+  // cycle is search -> that Space -> the action row -> search; all-Spaces tabs
+  // Space-to-Space. Distinct from the arrow rove (fine: every link). Tab is
+  // intentionally hijacked here, so intra-Space links and per-item remove
+  // buttons are reached with the arrows or the mouse, not with Tab.
+  function tabStops(){
+    var stops=[q], vs=visibleSpaces(), i;
+    for(i=0;i<vs.length;i++){ var f=firstFocusable(vs[i]); if(f) stops.push(f); }
+    if(allBtn) stops.push(allBtn);
+    if(layoutBtn && fullView) stops.push(layoutBtn); // only focusable while shown
+    if(expBtn) stops.push(expBtn);
+    if(impBtn) stops.push(impBtn);
+    if(resetBtn) stops.push(resetBtn);
+    return stops;
+  }
+  function tabStopIndex(stops){
+    var a=document.activeElement, i=stops.indexOf(a);
+    if(i>=0) return i;
+    var sec=closestSpace(a || roveEl); // a roved/middle link maps to its Space's stop
+    if(sec){ var j=stops.indexOf(firstFocusable(sec)); if(j>=0) return j; }
+    if(roveEl){ var k=stops.indexOf(roveEl); if(k>=0) return k; }
+    return -1;
+  }
+  function focusStop(t){
+    if(!t) return;
+    if(t.matches && t.matches('a.favtile, a.tile, a.link, details.folder>summary')){ setRove(t); return; }
+    if(roveEl){ roveEl.classList.remove('rove'); roveEl=null; }
+    try{ t.focus(); }catch(_e){}
+  }
+  function tabCycle(forward){
+    var stops=tabStops(); if(!stops.length) return;
+    var idx=tabStopIndex(stops);
+    var ni = idx<0 ? (forward?0:stops.length-1) : (idx + (forward?1:-1));
+    if(ni<0) ni += stops.length; if(ni>=stops.length) ni -= stops.length;
+    focusStop(stops[ni]);
   }
 
   // ---- search ----
@@ -982,7 +1126,9 @@ const SCRIPT = `
   }
   function resetAll(){
     if(!window.confirm('Discard your edits and restore the original Arc export?')) return;
-    lsDel(KEY_TREE); working = clone(DATA); rerender();
+    // Restore the export fully: drop the edited tree AND the remembered active
+    // Space, so "restore the original" lands on the export's default Space.
+    lsDel(KEY_TREE); lsDel(KEY_ACTIVE); activeId = null; working = clone(DATA); rerender();
   }
 
   function clearSearch(){ if(document.body.classList.contains('searching')){ q.value=''; exitSearch(); count.textContent=''; } }
@@ -1002,6 +1148,8 @@ const SCRIPT = `
   // ---- keyboard ----
   document.addEventListener('keydown', function(e){
     var t = e.target, typing = t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable);
+    // Tab works even from the search field (its whole point is search -> links).
+    if(e.key==='Tab' && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); tabCycle(!e.shiftKey); return; }
     if(!typing && e.key==='/' && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); q.focus(); return; }
     if(!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey){
       if(e.key==='ArrowDown'){ e.preventDefault(); rove(1); return; }
@@ -1042,7 +1190,7 @@ const SCRIPT = `
   document.addEventListener('drop', function(e){ if(drag || dtHasItem(e.dataTransfer)) e.preventDefault(); clearDI(); });
 
   // ---- boot ----
-  function boot(){ buildShell(); rerender(); q.focus(); }
+  function boot(){ buildShell(); applyLayout(); rerender(); q.focus(); }
   try{ boot(); }
   catch(e){
     // A corrupt working tree slipped past validation: discard it, fall back to

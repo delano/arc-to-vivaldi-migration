@@ -280,3 +280,49 @@ test("renderPageDocument: ships favorites, split, and arrow-key navigation", () 
   ok(html.includes("ArrowDown") && html.includes("ArrowRight") && html.includes("function rove"),
     "client wires roving arrow-key navigation for the all-spaces view");
 });
+
+// ---- embedded favicons (--favicons), Tab cycle, wide layout ----
+
+const ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+
+test("buildWirePayload: embeds only icons for hosts present, keyed by host", () => {
+  const map = new Map([
+    ["mail.example", ICON],
+    ["home.example", ICON],
+    ["ghost.example", ICON], // not referenced by any leaf -> dropped
+  ]);
+  const p = buildWirePayload(twoTier, { ...opts, icons: map });
+  deepStrictEqual(Object.keys(p.icons).sort(), ["home.example", "mail.example"]);
+  strictEqual(p.icons["mail.example"], ICON);
+});
+
+test("buildWirePayload: no icons option yields an empty icon map", () => {
+  const p = buildWirePayload(twoTier, opts);
+  deepStrictEqual(p.icons, {});
+});
+
+test("renderPageDocument: embeds favicons inline, still making zero third-party requests", () => {
+  const html = renderPageDocument(twoTier, { ...opts, icons: new Map([["home.example", ICON]]) });
+  const payload = extractPayload(html) as { icons: Record<string, string> };
+  strictEqual(payload.icons["home.example"], ICON, "icon round-trips through the embedded JSON");
+  // Icons are inline bytes painted as a CSS background at runtime: no <img>, no
+  // src=, and no favicon provider hostname anywhere in the document.
+  ok(!/<img\b/i.test(html), "no literal <img>");
+  ok(!/\bsrc\s*=\s*["']/i.test(html), "no src= attribute");
+  for (const host of ["s2/favicons", "googleapis", "duckduckgo", "gstatic"]) {
+    ok(!html.includes(host), "must not contain provider host " + host);
+  }
+  ok(html.includes("validIcons") && html.includes("ICON_RE"),
+    "client re-validates the (untrusted) imported icon map against an allowlist");
+  ok(html.includes("hasicon"), "client paints a resolved icon as a background tile");
+});
+
+test("renderPageDocument: ships the Tab cycle and the wide all-spaces layout", () => {
+  const html = renderPageDocument(twoTier, opts);
+  ok(html.includes("function tabCycle") && html.includes("function tabStops"),
+    "coarse Tab cycle: search -> each Space's first link -> action row -> search");
+  ok(html.includes("'Tab'") || html.includes("key==='Tab'"),
+    "Tab is intercepted in the keyboard handler");
+  ok(html.includes("function toggleWide") && html.includes("KEY_LAYOUT") && html.includes("spacewrap"),
+    "persisted long/wide column layout for the all-spaces view");
+});
