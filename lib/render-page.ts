@@ -268,8 +268,21 @@ const STYLE = `
   --bg:#f6f6f7; --panel:#ffffff; --fg:#1d1d1f; --muted:#6b6b70;
   --border:#e6e6e9; --hover:#f0f0f2; --accent2:#3b6ef0; --radius:12px;
 }
+/* Theme modes (cycled by the 't' hotkey, persisted in localStorage):
+   - "system" carries no overrides, so it inherits the :root light palette and
+     flips to the dark palette only when the OS prefers dark (the media query
+     below is gated on data-theme="system"). This is the default.
+   - "dark"/"sepia" are explicit overrides that win over the OS preference. */
+body[data-theme="dark"]{
+  --bg:#161618; --panel:#1f1f22; --fg:#ececee; --muted:#9a9aa0;
+  --border:#2c2c30; --hover:#27272b; --accent2:#5b86f5;
+}
+body[data-theme="sepia"]{
+  --bg:#f1e7d0; --panel:#fbf3e1; --fg:#33291b; --muted:#6f6147;
+  --border:#ddcdab; --hover:#e7d9ba; --accent2:#8a5a2b;
+}
 @media (prefers-color-scheme: dark){
-  :root{
+  body[data-theme="system"]{
     --bg:#161618; --panel:#1f1f22; --fg:#ececee; --muted:#9a9aa0;
     --border:#2c2c30; --hover:#27272b; --accent2:#5b86f5;
   }
@@ -377,12 +390,13 @@ a.favtile .fav{width:30px; height:30px; border-radius:8px; font-size:15px;}
 a.favtile .t{font-size:10.5px; line-height:1.25; max-height:2.5em; overflow:hidden; color:var(--muted); width:100%; white-space:normal; word-break:break-word;}
 a.favtile .rm{top:3px; right:3px; left:auto;}
 
-.split{position:relative; border:1px solid var(--border); border-left:3px solid var(--a1); border-radius:9px; padding:8px 8px 4px; margin:2px 0;}
-.split>.split-h{display:flex; align-items:center; gap:6px; font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 6px 2px;}
-.split>.panes{display:flex; gap:8px;}
-.split.vert>.panes{flex-direction:column;}
-.split .pane{flex:1 1 0; min-width:0; border:1px dashed var(--border); border-radius:8px; padding:3px;}
-.split>.rm{top:6px; right:6px;}
+.split{position:relative; padding:2px 22px 2px 2px; margin:2px 0;}
+.split>.panes{display:flex; flex-wrap:nowrap; gap:8px;}
+.split.vert>.panes{flex-direction:column; gap:0;}
+.split .pane{flex:1 1 0; min-width:0; padding:3px;}
+.split>.panes>.pane + .pane{border-left:1px solid var(--border); padding-left:11px;}
+.split.vert>.panes>.pane + .pane{border-left:0; border-top:1px solid var(--border); padding-top:7px; margin-top:4px;}
+.split>.rm{top:2px; right:2px;}
 
 .rove{outline:2px solid var(--accent2) !important; outline-offset:1px; border-radius:9px;}
 
@@ -405,6 +419,15 @@ a.tile{
 a.tile:hover{border-color:var(--muted)}
 a.tile .t{font-size:12.5px; line-height:1.3; max-height:2.6em; overflow:hidden;}
 a.link .t{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+/* URL sub-line: low visual priority (small, muted), hostname emphasized in
+   --fg. Always present in the DOM; revealed under body.showurls (the 'u'
+   hotkey). a.tile is already a column so the line stacks naturally; a.link is
+   a row, so wrap it to a second line aligned under the title. */
+.url{display:none; font-size:11px; color:var(--muted); line-height:1.3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%;}
+body.showurls .url{display:block;}
+.url-h{color:var(--fg); opacity:.8;}
+body.showurls a.link{flex-wrap:wrap; align-items:flex-start;}
+body.showurls a.link .url{flex-basis:100%; padding-left:30px;}
 .dial{
   position:absolute; top:6px; right:8px; font-size:10px; color:var(--muted);
   background:var(--hover); border-radius:5px; padding:0 5px; line-height:1.5;
@@ -458,6 +481,41 @@ body.searching .group.empty{display:none}
 body.searching details.empty{display:none}
 body.searching .miss{display:none}
 
+/* ---- search-active visual hierarchy ----
+   During live search the matches are what matter; the structural scaffolding
+   that survives (folder names, group/space headers, counts/badges, disclosure
+   chrome) stays for context but recedes. Everything below is scoped to
+   body.searching, so non-search browsing is byte-for-byte unchanged. */
+/* Foreground matches: a surviving (non-.miss) link is, by definition, a hit.
+   Lift it above the muted scaffolding with a faint backing tint; tiles already
+   carry a panel fill, so only firm up their border. */
+body.searching a.link:not(.miss){background:var(--hover);}
+body.searching a.link:not(.miss) .t{font-weight:600;}
+body.searching a.tile:not(.miss),
+body.searching a.favtile:not(.miss){border-color:var(--muted);}
+/* Optional matched-substring emphasis (span.hit, built via textContent only). */
+.hit{font-weight:700; color:var(--fg);}
+/* De-emphasize folder names: drop the bold, mute the colour. */
+body.searching .fname{font-weight:400; color:var(--muted);}
+/* De-emphasize group headers and the folder disclosure caret. */
+body.searching .group>h2{opacity:.5;}
+body.searching details.folder>summary::before{opacity:.3;}
+/* De-emphasize counts/badges: flatten the gradient/fill, shrink and mute. */
+body.searching .pill,
+body.searching .dial{background:transparent; color:var(--muted); opacity:.6;}
+body.searching .badge{background:var(--hover); color:var(--muted); box-shadow:none;}
+body.searching .space-link .ct{opacity:.6;}
+/* De-emphasize space banners: drop the heavy gradient + overlay + shadows to a
+   flat panel chip so the loud colour block stops competing with the matches. */
+body.searching .banner{
+  background:var(--panel); border:1px solid var(--border); color:var(--muted);
+  padding:12px 16px; margin-bottom:14px;
+}
+body.searching .banner::after{display:none;}
+body.searching .banner h1{font-size:16px; text-shadow:none; color:var(--fg); opacity:.7;}
+body.searching .banner .emoji{font-size:22px; filter:none;}
+body.searching .banner .sub{opacity:.7;}
+
 @media (prefers-reduced-motion: reduce){
   *{transition:none !important; scroll-behavior:auto !important}
 }
@@ -484,6 +542,8 @@ const SCRIPT = `
   var KEY_TREE = NS + ':tree';
   var KEY_ACTIVE = NS + ':active';
   var KEY_LAYOUT = NS + ':layout';
+  var KEY_URLS = NS + ':urls';
+  var KEY_THEME = NS + ':theme';
 
   // ---- storage helpers (file:// localStorage works in Chromium/Vivaldi) ----
   function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
@@ -723,6 +783,15 @@ const SCRIPT = `
     if(dialNo){ a.appendChild(el('span','dial', String(dialNo))); }
     a.appendChild(favTile(host, node.title || host));
     a.appendChild(el('span','t', node.title));
+    // URL sub-line (toggled by the 'u' hotkey via body.showurls). Hostname is
+    // emphasized; the scheme + path are dimmed. Skipped for favtiles, whose
+    // centered .t leaves no room. Built with el/textContent only (no raw markup).
+    if(cls!=='favtile' && href){
+      var sub = el('span','url');
+      if(host){ sub.appendChild(el('span','url-h', host)); sub.appendChild(el('span',null, node.url.slice(node.url.indexOf(host)+host.length))); }
+      else { sub.textContent = node.url; }
+      a.appendChild(sub);
+    }
     a.appendChild(removeBtn(arr, node));
     makeDraggable(a, node, arr);
     makeItemDrop(a, node, arr);
@@ -755,14 +824,11 @@ const SCRIPT = `
   function renderInto(container, nodes){
     for(var i=0;i<nodes.length;i++){ container.appendChild(nodeEl(nodes[i], nodes)); }
   }
-  // A split view: its panes shown together (side by side or stacked). The header
-  // row is the drag/drop handle so panes keep their own per-item drag behaviour.
+  // A split view: its panes shown flat (side by side or stacked) with only a
+  // faint hairline between them \\u2014 no container box, no header. The container
+  // itself is the drag/drop handle so panes keep their own per-item drag behaviour.
   function makeSplit(node, arr){
     var d = el('div','split' + (node.o==='v' ? ' vert' : ''));
-    var h = el('div','split-h');
-    h.appendChild(el('span',null,'\\u25a3'));
-    h.appendChild(el('span',null, node.o==='v' ? 'Split \\u00b7 stacked' : 'Split \\u00b7 side by side'));
-    d.appendChild(h);
     var panes = el('div','panes');
     for(var i=0;i<node.children.length;i++){
       var pane = el('div','pane');
@@ -771,8 +837,8 @@ const SCRIPT = `
     }
     d.appendChild(panes);
     d.appendChild(removeBtn(arr, node));
-    makeDraggable(h, node, arr);
-    makeItemDrop(h, node, arr);
+    makeDraggable(d, node, arr);
+    makeItemDrop(d, node, arr);
     return d;
   }
   // Favorites: Arc's per-profile top-app grid. Flat tabs render as compact
@@ -799,12 +865,14 @@ const SCRIPT = `
       container.appendChild(grid);
     }
     if(folders.length){
-      // Render pinned folders against the REAL backing array (nodes), not the
+      // Render pinned non-leaves against the REAL backing array (nodes), not the
       // throwaway 'folders' split: otherwise removeBtn/makeDraggable would close
       // over the temp array, so removing a pinned folder is a no-op and dragging
-      // one duplicates it (it leaves the temp array but never sp.pinned).
+      // one duplicates it (it leaves the temp array but never sp.pinned). Route
+      // through nodeEl so a pinned split renders as side-by-side panes (makeSplit)
+      // rather than being mis-rendered by makeFolder as an empty-titled folder.
       var wrap=el('div');
-      for(i=0;i<nodes.length;i++){ if(nodes[i].t!=='leaf') wrap.appendChild(makeFolder(nodes[i], nodes)); }
+      for(i=0;i<nodes.length;i++){ if(nodes[i].t!=='leaf') wrap.appendChild(nodeEl(nodes[i], nodes)); }
       container.appendChild(wrap); makeContainerDrop(wrap, nodes);
     }
   }
@@ -822,6 +890,12 @@ const SCRIPT = `
   var activeId = lsGet(KEY_ACTIVE);
   var fullView = false;
   var wide = lsGet(KEY_LAYOUT) === 'wide';
+  var showUrls = lsGet(KEY_URLS) === '1';
+  // Theme mode cycled by 't': 'dark' -> 'sepia' -> 'system' (default). 'system'
+  // follows prefers-color-scheme via the gated dark media query; explicit modes
+  // win over the OS. View pref; resetAll leaves it (like layout/urls).
+  var THEMES = ['dark','sepia','system'];
+  var theme = lsGet(KEY_THEME) || 'system';
 
   function activeSpace(){ for(var i=0;i<working.spaces.length;i++){ if(working.spaces[i].id===activeId) return working.spaces[i]; } return working.spaces[0]; }
 
@@ -836,8 +910,10 @@ const SCRIPT = `
       var sec = el('section','space'); sec.id = sp.id;
       sec.style.setProperty('--a1', sp.accent[0]); sec.style.setProperty('--a2', sp.accent[1]);
 
+      // No monogram/avatar tile in the main-content header: the Space title
+      // carries its own identity here. The emoji/monogram still appears in the
+      // sidebar nav badge and as the favicon fallback.
       var banner = el('header','banner');
-      banner.appendChild(el('span','emoji', sp.emoji));
       var meta = el('div','meta'); meta.appendChild(el('h1', null, sp.title));
       var nL = spaceCount(sp), nF = spaceFolders(sp);
       var sub = nL + (nL===1?' link':' links') + (nF>0 ? ' \\u00b7 ' + nF + (nF===1?' folder':' folders') : '');
@@ -924,8 +1000,10 @@ const SCRIPT = `
       [['\\u23251\\u20139'], 'Switch Space'],
       [['\\u23250'], 'Show all Spaces'],
       [['\\u2191\\u2193'], 'Move focus'],
-      [['\\u2190\\u2192'], 'Prev/next Space'],
+      [['\\u2190\\u2192'], 'Move across columns'],
       [['Tab'], 'Cycle Spaces / actions'],
+      [['u'], 'Show URLs'],
+      [['t'], 'Theme'],
       [['Paste','Drop'], 'Add a link']
     ];
     for(var ci=0; ci<cheats.length; ci++){
@@ -977,15 +1055,39 @@ const SCRIPT = `
   // a visible effect in the all-Spaces view; the choice persists across reloads.
   function applyLayout(){ document.body.classList.toggle('wide', wide); if(layoutBtn){ layoutBtn.textContent = wide ? 'Long' : 'Wide'; layoutBtn.classList.toggle('on', wide); } }
   function toggleWide(){ wide=!wide; lsSet(KEY_LAYOUT, wide ? 'wide' : 'long'); applyLayout(); var sec=document.getElementById(activeId); if(sec) sec.scrollIntoView({block:'nearest', inline:'start'}); }
+  // URL sub-lines under each link title. The .url node is always in the DOM;
+  // a body class shows/hides it, so toggling never rebuilds the tree (keeps
+  // roving focus and search state). View pref; resetAll leaves it (like layout).
+  function applyUrls(){ document.body.classList.toggle('showurls', showUrls); }
+  // Theme: a body[data-theme] attribute selects the palette (see :root + the
+  // gated dark media query in the stylesheet). An attribute swap repaints purely
+  // in CSS, so no rerender (keeps roving focus / search state). In 'system' mode
+  // the CSS media query already follows the OS live; the matchMedia listener
+  // below is belt-and-suspenders for any future JS that reads the resolved mode.
+  function applyTheme(){ document.body.setAttribute('data-theme', theme); }
 
-  // ---- roving keyboard navigation (\\u2191\\u2193 between links, \\u2190\\u2192 between Spaces) ----
-  // Drives both the single-Space and the all-Spaces ("Show all") vertical view.
+  // ---- roving keyboard navigation (all arrows move WITHIN the active Space) ----
+  // \\u2191\\u2193 walk the focusables in DOM order; \\u2190\\u2192 move horizontally
+  // across grid columns (falling back to prev/next when there is no on-row peer).
+  // Arrows never cross Space boundaries: the list is scoped to the active Space
+  // even in the all-Spaces ("Show all") view, where every Space is visible.
+  // (Switching Spaces is Tab / \\u23251\\u20139, not the arrows.)
   var roveEl = null;
-  function focusList(){
-    var all = content.querySelectorAll('a.favtile, a.tile, a.link, details.folder>summary'), out=[], i;
+  function focusList(scope){
+    var root = scope || content;
+    var all = root.querySelectorAll('a.favtile, a.tile, a.link, details.folder>summary'), out=[], i;
     // offsetParent===null skips items in a hidden Space or a collapsed folder.
     for(i=0;i<all.length;i++){ if(all[i].classList.contains('miss')) continue; if(all[i].offsetParent===null) continue; out.push(all[i]); }
     return out;
+  }
+  // The Space to scope arrow roving to: the roved item's Space if still attached,
+  // else the visibly-active Space (single view), else the first visible Space.
+  function activeRoveSpace(){
+    if(roveEl && content.contains(roveEl)){ var s = closestSpace(roveEl); if(s) return s; }
+    var act = content.querySelector('.space.active');
+    if(act && act.offsetParent!==null) return act;
+    var vs = visibleSpaces();
+    return vs.length ? vs[0] : null;
   }
   function setRove(e){
     if(roveEl && roveEl!==e) roveEl.classList.remove('rove');
@@ -994,14 +1096,40 @@ const SCRIPT = `
     e.scrollIntoView({block:'nearest'});
   }
   function rove(dir){
-    var list = focusList(); if(!list.length) return;
+    var list = focusList(activeRoveSpace()); if(!list.length) return;
     var idx = list.indexOf(document.activeElement);
     if(idx<0 && roveEl) idx = list.indexOf(roveEl);
     if(idx<0){ setRove(dir>0 ? list[0] : list[list.length-1]); return; }
     var ni = idx + dir; if(ni<0) ni=0; if(ni>=list.length) ni=list.length-1;
     setRove(list[ni]);
   }
-  function spaceIndex(id){ for(var i=0;i<working.spaces.length;i++){ if(working.spaces[i].id===id) return i; } return -1; }
+  // \\u2190\\u2192 within the active Space: a geometric horizontal move. Pick the
+  // nearest focusable whose center lies in the chosen direction on roughly the
+  // same row (smallest vertical delta, then smallest horizontal gap) \\u2014 this
+  // walks the favorites/pinned grids by column. With no on-row peer (single-column
+  // lists), fall back to prev/next in DOM order so \\u2190\\u2192 still moves.
+  function roveHoriz(dir){
+    var list = focusList(activeRoveSpace()); if(!list.length) return;
+    var cur = roveEl && list.indexOf(roveEl)>=0 ? roveEl
+            : (list.indexOf(document.activeElement)>=0 ? document.activeElement : null);
+    if(!cur){ setRove(dir>0 ? list[0] : list[list.length-1]); return; }
+    var cr = cur.getBoundingClientRect();
+    var cx = cr.left + cr.width/2, cy = cr.top + cr.height/2;
+    var best = null, bestScore = Infinity, i;
+    for(i=0;i<list.length;i++){
+      if(list[i]===cur) continue;
+      var r = list[i].getBoundingClientRect();
+      var x = r.left + r.width/2, y = r.top + r.height/2;
+      var dx = x - cx;
+      if(dir>0 ? dx<=1 : dx>=-1) continue; // must be to the right / left
+      var dy = Math.abs(y - cy);
+      if(dy > Math.max(cr.height, r.height)) continue; // not on roughly the same row
+      var score = dy*1000 + Math.abs(dx); // same-row first, then nearest horizontally
+      if(score < bestScore){ bestScore = score; best = list[i]; }
+    }
+    if(best){ setRove(best); return; }
+    rove(dir); // single-column / row end: behave like \\u2191\\u2193
+  }
   // First focusable that is actually on screen: skip search-hidden links (.miss)
   // and anything in a collapsed folder / hidden Space (offsetParent===null), the
   // same filter focusList() uses. Otherwise Tab / arrow-Space could land focus on
@@ -1013,22 +1141,6 @@ const SCRIPT = `
   }
   function closestSpace(e){ while(e && e!==content){ if(e.classList && e.classList.contains('space')) return e; e=e.parentNode; } return null; }
   function visibleSpaces(){ var secs=content.querySelectorAll('.space'), out=[], i; for(i=0;i<secs.length;i++){ if(secs[i].offsetParent!==null) out.push(secs[i]); } return out; }
-  function roveSpace(dir){
-    if(!fullView){
-      // Single view: \\u2190\\u2192 switches the active Space, then focuses its first item.
-      var ci = spaceIndex(activeId); if(ci<0) ci=0;
-      var ni = ci+dir; if(ni<0 || ni>=working.spaces.length) return;
-      gotoSpace(working.spaces[ni].id);
-      var sec = document.getElementById(working.spaces[ni].id), f = sec && firstFocusable(sec);
-      if(f) setRove(f);
-      return;
-    }
-    var vs = visibleSpaces(); if(!vs.length) return;
-    var cur = roveEl ? closestSpace(roveEl) : null;
-    var idx = Array.prototype.indexOf.call(vs, cur);
-    var n2 = (idx<0 ? 0 : idx+dir); if(n2<0) n2=0; if(n2>=vs.length) n2=vs.length-1;
-    var f2 = firstFocusable(vs[n2]); if(f2) setRove(f2); else vs[n2].scrollIntoView({block:'start'});
-  }
 
   // ---- Tab cycle (coarse) ----
   // search -> first link of each VISIBLE Space -> Show all -> [Wide] -> Export
@@ -1154,8 +1266,10 @@ const SCRIPT = `
     if(!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey){
       if(e.key==='ArrowDown'){ e.preventDefault(); rove(1); return; }
       if(e.key==='ArrowUp'){ e.preventDefault(); rove(-1); return; }
-      if(e.key==='ArrowRight'){ e.preventDefault(); roveSpace(1); return; }
-      if(e.key==='ArrowLeft'){ e.preventDefault(); roveSpace(-1); return; }
+      if(e.key==='ArrowRight'){ e.preventDefault(); roveHoriz(1); return; }
+      if(e.key==='ArrowLeft'){ e.preventDefault(); roveHoriz(-1); return; }
+      if(e.key==='u'){ e.preventDefault(); showUrls=!showUrls; lsSet(KEY_URLS, showUrls?'1':'0'); applyUrls(); return; }
+      if(e.key==='t'){ e.preventDefault(); var ti=THEMES.indexOf(theme); theme=THEMES[(ti+1)%THEMES.length]; lsSet(KEY_THEME, theme); applyTheme(); return; }
     }
     var m = /^Digit([0-9])$/.exec(e.code || '');
     if(!m) return;
@@ -1189,8 +1303,18 @@ const SCRIPT = `
   document.addEventListener('dragover', function(e){ if(drag || dtHasItem(e.dataTransfer)) e.preventDefault(); });
   document.addEventListener('drop', function(e){ if(drag || dtHasItem(e.dataTransfer)) e.preventDefault(); clearDI(); });
 
+  // React live to OS scheme flips while in 'system' mode. The CSS media query
+  // already repaints on its own; this hook lets future JS that depends on the
+  // resolved scheme stay in sync. Registered once, outside boot's retry path.
+  try{
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    var onScheme = function(){ if(theme==='system') applyTheme(); };
+    if(mq.addEventListener) mq.addEventListener('change', onScheme);
+    else if(mq.addListener) mq.addListener(onScheme);
+  }catch(_e){}
+
   // ---- boot ----
-  function boot(){ buildShell(); applyLayout(); rerender(); q.focus(); }
+  function boot(){ buildShell(); applyLayout(); applyUrls(); applyTheme(); rerender(); q.focus(); }
   try{ boot(); }
   catch(e){
     // A corrupt working tree slipped past validation: discard it, fall back to

@@ -275,10 +275,112 @@ test("renderPageDocument: ships favorites, split, and arrow-key navigation", () 
   const html = renderPageDocument(twoTier, opts);
   ok(html.includes("renderFavorites") && html.includes("favgrid"),
     "client builds the per-profile favorites grid");
-  ok(html.includes("makeSplit") && html.includes("Split \\u00b7 side by side"),
-    "client renders split views as labeled side-by-side panes");
+  ok(html.includes("makeSplit") && html.includes("el('div','panes')"),
+    "client renders split views as side-by-side panes");
   ok(html.includes("ArrowDown") && html.includes("ArrowRight") && html.includes("function rove"),
     "client wires roving arrow-key navigation for the all-spaces view");
+});
+
+// ARROW SCOPING regression: every arrow (\\u2191\\u2193 and \\u2190\\u2192) navigates WITHIN
+// the active Space only; arrows never switch Spaces (that is Tab / \\u23251\\u20139).
+// The fix scopes the rove focusable list to the active Space (focusList(scope)),
+// routes \\u2190\\u2192 to a horizontal in-Space move (roveHoriz), and removes the old
+// per-Space arrow handler (roveSpace) entirely.
+test("renderPageDocument: arrows are scoped to the active Space (no Space switching)", () => {
+  const html = renderPageDocument(twoTier, opts);
+  // The old Space-switching arrow handler and its index helper are gone.
+  ok(!html.includes("function roveSpace"),
+    "roveSpace (arrow-driven Space switching) is removed");
+  ok(!html.includes("function spaceIndex"),
+    "spaceIndex (used only by roveSpace) is removed");
+  ok(!/ArrowRight'\)\{ e\.preventDefault\(\); roveSpace/.test(html),
+    "ArrowRight no longer switches Spaces");
+  // \\u2190\\u2192 now move horizontally within the Space; the focusable list is
+  // scoped to the active Space so roving never crosses Space boundaries.
+  ok(html.includes("function roveHoriz"),
+    "client wires a horizontal in-Space move for \\u2190\\u2192");
+  ok(html.includes("roveHoriz(1)") && html.includes("roveHoriz(-1)"),
+    "ArrowRight/ArrowLeft route to roveHoriz");
+  ok(html.includes("function activeRoveSpace") && html.includes("focusList(activeRoveSpace())"),
+    "rove scopes its focusable list to the active Space");
+});
+
+// AVATAR REMOVAL regression: the main-content Space header no longer emits the
+// single-letter monogram/avatar tile. The emoji/monogram is kept in the sidebar
+// nav badge and as the favicon fallback, so those constructs must remain.
+test("renderPageDocument: main-content space header drops the monogram avatar tile", () => {
+  const html = renderPageDocument(twoTier, opts);
+  // The banner emoji span must not be appended in renderContent anymore.
+  ok(!html.includes("banner.appendChild(el('span','emoji', sp.emoji))"),
+    "renderContent no longer emits the main-content avatar tile");
+  // The sidebar nav badge and the favicon monogram fallback are untouched.
+  ok(html.includes("el('span','badge', sp.emoji)"),
+    "sidebar nav badge still carries the Space emoji/monogram");
+  ok(html.includes("s.textContent = monogram(label)"),
+    "favicon fallback monogram is preserved");
+});
+
+// SPLIT BUG regression: a split in the PINNED tier must render as side-by-side
+// panes carrying its children's real link titles, NOT a folder with an empty
+// title. The fix routes pinned non-leaves through nodeEl (-> makeSplit) instead
+// of calling makeFolder directly. twoTier pins exactly such a split (Left/Right).
+test("renderPageDocument: a PINNED split routes through nodeEl (side-by-side panes, not an empty-title folder)", () => {
+  const html = renderPageDocument(twoTier, opts);
+  // The buggy direct makeFolder() call on pinned non-leaves must be gone:
+  // renderPinned must hand non-leaves to nodeEl so splits reach makeSplit.
+  ok(!/wrap\.appendChild\(makeFolder\(nodes\[i\], nodes\)\)/.test(html),
+    "pinned non-leaves no longer go straight to makeFolder (which empties a split's title)");
+  ok(html.includes("if(nodes[i].t!=='leaf') wrap.appendChild(nodeEl(nodes[i], nodes));"),
+    "renderPinned routes non-leaf pinned nodes through nodeEl");
+  // makeSplit builds .panes (side-by-side via flex) and pane wrappers per child;
+  // CSS must lay panes out horizontally for o:'h'.
+  ok(html.includes("el('div','panes')") && html.includes("el('div','pane')"),
+    "makeSplit builds a .panes row with a .pane per child");
+  ok(html.includes(".split>.panes{display:flex; flex-wrap:nowrap;"),
+    "split panes are laid out side by side (horizontal flex, no wrap)");
+  ok(html.includes(".split.vert>.panes{flex-direction:column;"),
+    "the stacked (o:'v') variant keeps its column layout");
+  // The split's child link titles survive into the embedded payload non-empty,
+  // so makeSplit -> makeLeaf renders them as real titles (no empty '.t').
+  const payload = extractPayload(html) as {
+    spaces: Array<{ pinned: Array<{ t: string; children?: Array<{ title: string }> }> }>;
+  };
+  const splitNode = payload.spaces[0].pinned.find((n) => n.t === "split");
+  ok(splitNode, "the pinned split survives in the payload");
+  deepStrictEqual(splitNode!.children!.map((c) => c.title), ["Left", "Right"],
+    "the split's child links carry non-empty titles");
+});
+
+// ARC FLAT-SPLIT regression: split views drop Arc-foreign chrome \\u2014 no outer
+// container box and no "SPLIT \\u00b7 SIDE BY SIDE" label \\u2014 leaving only a faint
+// hairline between panes. The container itself becomes the drag/drop handle.
+test("renderPageDocument: split views render flat (no box, no label) with a hairline between panes", () => {
+  const html = renderPageDocument(twoTier, opts);
+  // The "Split \\u00b7 side by side / stacked" label element is gone entirely.
+  ok(!html.includes(".split-h"),
+    "the .split-h label/header element and its CSS are removed");
+  ok(!html.includes("Split \\u00b7 side by side") && !html.includes("Split \\u00b7 stacked"),
+    "the 'Split \\u00b7 ...' label text is removed");
+  ok(!html.includes("el('div','split-h')"),
+    "makeSplit no longer builds a .split-h header");
+  // The container box is gone: no border/radius on .split, no dashed pane border.
+  ok(!/\.split\{[^}]*border:1px solid var\(--border\)/.test(html),
+    ".split no longer has a bordering box");
+  ok(!/\.split\{[^}]*border-left:3px solid var\(--a1\)/.test(html),
+    ".split no longer has the accent left rail of a box");
+  ok(!/\.split \.pane\{[^}]*border:1px dashed var\(--border\)/.test(html),
+    ".pane no longer has a dashed border");
+  // A faint 1px hairline now separates adjacent side-by-side panes; the stacked
+  // variant gets a horizontal separator instead.
+  ok(html.includes(".split>.panes>.pane + .pane{border-left:1px solid var(--border)"),
+    "side-by-side panes are divided by a faint vertical hairline");
+  ok(html.includes(".split.vert>.panes>.pane + .pane{border-left:0; border-top:1px solid var(--border)"),
+    "stacked panes are divided by a faint horizontal hairline");
+  // The per-split remove button still ships and the container is the drag handle.
+  ok(html.includes("d.appendChild(removeBtn(arr, node));"),
+    "the per-split remove button is still appended");
+  ok(html.includes("makeDraggable(d, node, arr);") && html.includes("makeItemDrop(d, node, arr);"),
+    "the flat split container is now the drag/drop handle");
 });
 
 // ---- embedded favicons (--favicons), Tab cycle, wide layout ----
@@ -325,4 +427,110 @@ test("renderPageDocument: ships the Tab cycle and the wide all-spaces layout", (
     "Tab is intercepted in the keyboard handler");
   ok(html.includes("function toggleWide") && html.includes("KEY_LAYOUT") && html.includes("spacewrap"),
     "persisted long/wide column layout for the all-spaces view");
+});
+
+// URL HOTKEY: a bare 'u' toggles a per-link URL sub-line (smaller + muted, with
+// the hostname emphasized). It's a body-class toggle (no rerender), persisted as
+// a view pref in localStorage (KEY_URLS), and resetAll must leave it untouched.
+// The .url sub-line is always built into the DOM and shown/hidden by CSS.
+test("renderPageDocument: ships the 'u' URL-sub-line toggle (handler, persistence, CSS, builder)", () => {
+  const html = renderPageDocument(twoTier, opts);
+  // Hotkey handler lives in the keyboard listener, toggles state, persists, and
+  // applies via the body class (not a rerender).
+  ok(html.includes("e.key==='u'") && html.includes("applyUrls()"),
+    "'u' toggles the URL sub-line via applyUrls()");
+  ok(html.includes("KEY_URLS") && html.includes("lsSet(KEY_URLS"),
+    "the URL-sub-line preference persists to localStorage (KEY_URLS)");
+  ok(html.includes("classList.toggle('showurls', showUrls)"),
+    "applyUrls toggles a body class (no rerender, sub-line is CSS-hidden)");
+  // resetAll only clears the working tree + active Space; view prefs (KEY_URLS)
+  // must survive a reset, like KEY_LAYOUT.
+  ok(!/lsDel\(KEY_URLS\)/.test(html),
+    "resetAll leaves the URL-sub-line view pref untouched");
+  // CSS hooks: hidden by default, revealed under body.showurls, hostname in --fg.
+  ok(html.includes(".url{display:none;") && html.includes("body.showurls .url{display:block;}"),
+    "URL sub-line is hidden by default and shown under body.showurls");
+  ok(html.includes(".url-h{color:var(--fg)"),
+    "the hostname segment is emphasized (rendered in --fg)");
+  // The builder emits a .url node with an emphasized .url-h hostname segment,
+  // built via el/textContent (no innerHTML), and only for link/tile (not favtile).
+  ok(html.includes("el('span','url')") && html.includes("el('span','url-h', host)"),
+    "makeLeaf builds a .url sub-line with an emphasized .url-h hostname");
+  ok(html.includes("cls!=='favtile' && href"),
+    "the URL sub-line is attached for links/tiles only (skips favtiles)");
+  // Cheatsheet advertises the hotkey.
+  ok(html.includes("'Show URLs'"), "the shortcuts cheatsheet lists the URL toggle");
+});
+
+// THEME MODES: a bare 't' cycles dark -> sepia -> system (default 'system',
+// which follows prefers-color-scheme). It's a body[data-theme] attribute swap
+// (no rerender), persisted as a view pref in localStorage (KEY_THEME), and
+// resetAll must leave it untouched. The palettes reuse the existing :root CSS
+// variables via theme overrides; the dark media query is gated to 'system'.
+test("renderPageDocument: ships the 't' theme cycle (palettes, data-theme hooks, persistence, matchMedia)", () => {
+  const html = renderPageDocument(twoTier, opts);
+  // Palette overrides keyed off body[data-theme] reuse the :root variables.
+  ok(html.includes('body[data-theme="dark"]{') && html.includes('body[data-theme="sepia"]{'),
+    "explicit dark + sepia palettes override the :root variables via data-theme");
+  // The dark media query is gated to 'system' so explicit modes win over the OS,
+  // and 'system' still follows prefers-color-scheme.
+  ok(html.includes('@media (prefers-color-scheme: dark){') &&
+     html.includes('body[data-theme="system"]{'),
+    "system mode follows prefers-color-scheme via a gated dark media query");
+  // Hotkey handler cycles the mode, persists, and applies via the attribute.
+  ok(html.includes("e.key==='t'") && html.includes("applyTheme()"),
+    "'t' cycles the theme via applyTheme()");
+  ok(html.includes("var THEMES = ['dark','sepia','system']"),
+    "the cycle order is dark -> sepia -> system");
+  ok(html.includes("lsGet(KEY_THEME) || 'system'"),
+    "theme defaults to 'system' and loads the persisted preference");
+  ok(html.includes("KEY_THEME") && html.includes("lsSet(KEY_THEME"),
+    "the theme preference persists to localStorage (KEY_THEME)");
+  ok(html.includes("setAttribute('data-theme', theme)"),
+    "applyTheme sets a body data-theme attribute (no rerender, CSS repaints)");
+  // resetAll only clears the working tree + active Space; view prefs (KEY_THEME)
+  // must survive a reset, like KEY_LAYOUT / KEY_URLS.
+  ok(!/lsDel\(KEY_THEME\)/.test(html),
+    "resetAll leaves the theme view pref untouched");
+  // System mode reacts live to OS scheme flips via a matchMedia listener.
+  ok(html.includes("matchMedia('(prefers-color-scheme: dark)')") &&
+     html.includes("if(theme==='system') applyTheme()"),
+    "client reacts live to OS scheme changes while in system mode");
+  // applyTheme runs on boot so the initial paint matches the saved mode.
+  ok(html.includes("applyTheme(); rerender()"),
+    "boot applies the theme before the first render");
+  // Cheatsheet advertises the hotkey.
+  ok(html.includes("'Theme'"), "the shortcuts cheatsheet lists the theme toggle");
+});
+
+// SEARCH-ACTIVE visual hierarchy: while a live query is running the document
+// carries body.searching, and the CSS under it foregrounds the matches while
+// muting (but not hiding) the surviving structural scaffolding. Non-search
+// browsing must be unaffected, so every hook below is scoped to body.searching.
+test("renderPageDocument: search-active state foregrounds matches and de-emphasizes scaffolding", () => {
+  const html = renderPageDocument(twoTier, opts);
+  // The body-level state class is set when the query is non-empty and cleared
+  // when it empties / search exits.
+  ok(html.includes("document.body.classList.add('searching')"),
+    "entering search sets the body.searching state class");
+  ok(html.includes("document.body.classList.remove('searching')"),
+    "exiting search clears the body.searching state class");
+  // Matches (surviving, non-.miss links) are lifted above the scaffolding.
+  ok(html.includes("body.searching a.link:not(.miss)"),
+    "search-active CSS foregrounds matching links");
+  // Scaffolding is muted but kept visible (no display:none on these hooks).
+  ok(html.includes("body.searching .fname{font-weight:400; color:var(--muted);}"),
+    "search-active CSS de-emphasizes folder names without hiding them");
+  ok(html.includes("body.searching .group>h2{opacity:.5;}"),
+    "search-active CSS mutes group headers");
+  ok(html.includes("body.searching .banner{"),
+    "search-active CSS flattens the space banner");
+  ok(html.includes("body.searching .badge{background:var(--hover); color:var(--muted); box-shadow:none;}"),
+    "search-active CSS drops the heavy badge fill");
+  ok(html.includes("body.searching .pill,") || html.includes("body.searching .pill{") ||
+     html.includes("body.searching .pill\n"),
+    "search-active CSS mutes folder count pills");
+  // The de-emphasis must not hide the scaffolding it targets.
+  ok(!/body\.searching \.fname\{[^}]*display:\s*none/.test(html),
+    "muted scaffolding stays visible for context");
 });
