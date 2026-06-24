@@ -1,6 +1,7 @@
 export type CliMode =
   | "html"
   | "page"
+  | "json"
   | "probe"
   | "inject"
   | "inject-dry-run"
@@ -49,6 +50,8 @@ export function parseArgs(argv: readonly string[]): CliArgs {
       split = true;
     } else if (arg === "--page") {
       setMode("page");
+    } else if (arg === "--json") {
+      setMode("json");
     } else if (arg === "--probe") {
       setMode("probe");
     } else if (arg === "--inject") {
@@ -69,9 +72,9 @@ export function parseArgs(argv: readonly string[]): CliArgs {
     }
   }
 
-  if (split && mode !== "html" && mode !== "page") {
+  if (split && mode !== "html" && mode !== "page" && mode !== "json") {
     throw new Error(
-      "--split only applies to HTML/page output, not JS payload modes",
+      "--split only applies to HTML/page/json output, not JS payload modes",
     );
   }
 

@@ -5,7 +5,8 @@
  * Modes (mutually exclusive except --split):
  *   (default)           Netscape bookmarks HTML       -> ./arc-bookmarks.html
  *   --page              standalone offline Arc-style links page -> ./arc-spaces.html
- *   --split             one file per Space (pairs with default or --page)
+ *   --json              just the page's embedded data payload   -> ./arc-spaces.json
+ *   --split             one file per Space (pairs with default, --page or --json)
  *   --inject[-dry-run]  paste-able Vivaldi Workspaces importer (DevTools)
  *   --unwind[-dry-run]  close tabs a prior --inject created
  *   --probe             dump Vivaldi's private-API surface
@@ -35,7 +36,7 @@ import { buildInjectablePayload } from "./lib/payload.js";
 import { renderProbeScript } from "./lib/render-probe.js";
 import { renderInjectScript } from "./lib/render-inject.js";
 import { renderUnwindScript } from "./lib/render-unwind.js";
-import { renderPageDocument } from "./lib/render-page.js";
+import { renderPageDocument, buildWirePayload } from "./lib/render-page.js";
 import { extractAccentStops } from "./lib/arc-color.js";
 
 // ---------- Helpers ----------
@@ -380,12 +381,14 @@ async function main(): Promise<number> {
   if (args.help) {
     process.stdout.write(
       "usage: tsx arc-to-vivaldi.ts [--input <path>] [--output <path>]\n" +
-        "                            [--page] [--split | --probe | --inject | --inject-dry-run]\n" +
+        "                            [--page | --json] [--split | --probe | --inject | --inject-dry-run]\n" +
         "                            [-v]\n" +
         "  HTML modes (default): bookmark HTML. --page emits a standalone, offline\n" +
-        "    Arc-style links page instead. --split (one file per Space) works with both.\n" +
+        "    Arc-style links page (editable, remembers state). --json emits just the\n" +
+        "    embedded data payload (the page's contract). --split (one file per Space)\n" +
+        "    works with html/page/json.\n" +
         "  JS payload modes: --probe, --inject, --inject-dry-run are mutually exclusive\n" +
-        "    and cannot be combined with --split or --page.\n",
+        "    and cannot be combined with --split, --page, or --json.\n",
     );
     return 0;
   }
@@ -491,6 +494,35 @@ async function main(): Promise<number> {
       `unwind script (matches ${payload.spaces.length} space names) written to ${outPath}` +
         (args.mode === "unwind-dry-run" ? " (dry-run mode)" : "") +
         "\n",
+    );
+    return 0;
+  }
+
+  if (args.mode === "json") {
+    const generatedAt = new Date().toISOString();
+    const jsonPaths: string[] = [];
+    if (args.split) {
+      const outDir = args.output ?? ".";
+      await mkdir(outDir, { recursive: true });
+      const taken = new Set<string>();
+      for (const c of conversions) {
+        const slug = uniqueSlug(slugify(c.title), taken);
+        const filePath = join(outDir, `arc-${slug}.json`);
+        const payload = buildWirePayload([c], { generatedAt, title: c.title });
+        await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+        jsonPaths.push(filePath);
+      }
+    } else {
+      const outPath = args.output ?? "./arc-spaces.json";
+      const payload = buildWirePayload(conversions, { generatedAt });
+      await writeFile(outPath, JSON.stringify(payload, null, 2), "utf8");
+      jsonPaths.push(outPath);
+    }
+    const destination = args.split
+      ? `${jsonPaths.length} files in ${args.output ?? "."}`
+      : (jsonPaths[0] ?? "(no output)");
+    process.stderr.write(
+      `${conversions.length} spaces, ${totalBookmarks} links → ${destination}\n`,
     );
     return 0;
   }

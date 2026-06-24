@@ -27,6 +27,20 @@ test("parseArgs: --page + --inject is a conflict", () => {
   throws(() => parseArgs(["--page", "--inject"]), /mutually exclusive/);
 });
 
+test("parseArgs: --json sets mode to json", () => {
+  strictEqual(parseArgs(["--json"]).mode, "json");
+});
+
+test("parseArgs: --json + --split is allowed (one payload per Space)", () => {
+  const args = parseArgs(["--json", "--split"]);
+  strictEqual(args.mode, "json");
+  strictEqual(args.split, true);
+});
+
+test("parseArgs: --json + --page is a conflict", () => {
+  throws(() => parseArgs(["--json", "--page"]), /mutually exclusive/);
+});
+
 test("parseArgs: --probe sets mode to probe", () => {
   strictEqual(parseArgs(["--probe"]).mode, "probe");
 });

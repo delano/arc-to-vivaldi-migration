@@ -1,59 +1,60 @@
-import type { BookmarkLeaf, BookmarkNode, SpaceConversion } from "./types.js";
+import type { BookmarkNode, SpaceConversion } from "./types.js";
 
 // Renders a single, self-contained HTML "launcher" page that lays out every
-// Arc Space and its links in original order — a rough, pretty facsimile of
-// Arc's sidebar.
+// Arc Space and its links — a rough, pretty facsimile of Arc's sidebar that you
+// can also rearrange. The page renders ITSELF from an embedded JSON payload:
+// the document ships the Spaces as data (a <script type="application/json">)
+// and a small vanilla-JS app builds the DOM and owns all interaction.
 //
-// HARD PRIVACY CONSTRAINT: the output makes ZERO third-party requests when
-// opened. No favicon services, no web fonts, no CDNs. Site icons are rendered
-// as offline monogram tiles (first letter on a hash-derived color). The only
-// network activity is the user clicking a link, and those carry rel="noreferrer".
+// Why client-rendered: the page is now editable (drag-reorder, paste/drop to
+// add links, expand/collapse memory). Those are mutations, and a file:// page
+// can't rewrite itself — so a "working tree" lives in localStorage (namespaced
+// by docId) and shadows the embedded export. The embedded JSON is also the
+// stable contract a future hosted SPA would consume.
+//
+// HARD PRIVACY CONSTRAINT (unchanged): the output makes ZERO third-party
+// requests when opened. No favicon services, no web fonts, no CDNs. Site icons
+// are offline monogram tiles. The DOM is built with createElement/textContent
+// (never innerHTML), so bookmark data can't inject markup. Outbound links carry
+// rel="noreferrer". The only network activity is the user clicking a link.
 
 export interface RenderPageOptions {
   readonly generatedAt: string;
   readonly title?: string;
 }
 
-// ---------- escaping ----------
+// ---------- escaping (server-side, for the tiny static shell only) ----------
 
 function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function escapeAttr(s: string): string {
   return escapeHtml(s).replace(/"/g, "&quot;");
 }
 
-// ---------- small derivations ----------
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return "";
-  }
+// Embeds a JS object as the text content of a <script type="application/json">
+// block. JSON.stringify already neutralizes quotes/backslashes; we additionally
+// escape `<`, `>`, `&`, and the JS line separators to `\uXXXX`. The result is
+// still valid JSON (the browser keeps the escapes literally in the text node and
+// JSON.parse decodes them), but cannot terminate the <script> early ("</script>"
+// becomes "</script>") nor be mistaken for markup.
+function embedJson(obj: unknown): string {
+  return JSON.stringify(obj)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
 }
 
-// Schemes that execute script when an href is clicked. Browser bookmark data
-// legitimately carries these (saved bookmarklets, or entries synced/shared/
-// imported from elsewhere), so the generated page must never emit them as live
-// links — a click would run script in the page's file:// origin. We block only
-// the executable schemes so genuine navigation bookmarks (view-source:, file:,
-// chrome:, http(s), mailto:, ...) keep working.
-const UNSAFE_SCHEMES = new Set(["javascript:", "data:", "vbscript:"]);
+// ---------- small derivations (server-side, for accent + docId) ----------
 
-// Returns the URL when it is safe to place in an href, else undefined. Parsing
-// via `new URL` normalizes case and strips embedded tab/newline obfuscation, so
-// "JavaScript:" and "java\tscript:" are both caught.
-function safeHref(url: string): string | undefined {
-  try {
-    return UNSAFE_SCHEMES.has(new URL(url).protocol) ? undefined : url;
-  } catch {
-    return undefined;
-  }
+// Stable hue in [0,360); mirrors the client copy so accent fallbacks match.
+function hashHue(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
 }
 
 function monogram(s: string): string {
@@ -61,108 +62,113 @@ function monogram(s: string): string {
   return m ? m[0].toUpperCase() : "•";
 }
 
-// Stable hue in [0,360) so a given host always gets the same tile color.
-function hashHue(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h % 360;
+function slugify(s: string): string {
+  const stripped = s
+    .normalize("NFD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return stripped.length > 0 ? stripped : "arc-spaces";
 }
 
-function countLeaves(node: BookmarkNode): number {
-  if (node.kind === "leaf") return 1;
-  return node.children.reduce((n, c) => n + countLeaves(c), 0);
-}
-
-// ---------- per-node rendering ----------
-
-// Offline site tile: a colored rounded chip bearing the site's monogram.
-function tileIcon(seed: string, label: string): string {
-  const hue = hashHue(seed || label);
-  return `<span class="fav" style="--h:${hue}">${escapeHtml(monogram(label))}</span>`;
-}
-
-function leafMarkup(leaf: BookmarkLeaf, cls: string): string {
-  const host = hostOf(leaf.url);
-  const search = `${leaf.title} ${host}`.toLowerCase();
-  const inner =
-    tileIcon(host, leaf.title || host) +
-    `<span class="t">${escapeHtml(leaf.title)}</span>`;
-  const href = safeHref(leaf.url);
-  if (href === undefined) {
-    // Non-navigable scheme (javascript:/data:/...). Render an <a> WITHOUT an
-    // href so it can't execute, but keep the .link/.tile class and data-s so
-    // it still shows and is reachable by search.
-    return (
-      `<a class="${cls} unsafe" data-s="${escapeAttr(search)}"` +
-      ` title="blocked scheme — ${escapeAttr(leaf.url)}">` +
-      inner +
-      `</a>`
-    );
+// Short base36 fingerprint (FNV-1a). Mixed into docId so two DIFFERENT documents
+// that happen to share a title don't collide in the single file:// localStorage
+// origin. Derived from the Space titles only, so re-exporting the SAME Spaces
+// (reordering/adding links doesn't change titles) keeps the same id — a user's
+// edits survive re-exporting from Arc; adding/removing/renaming a Space resets.
+function shortHash(s: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
-  return (
-    `<a class="${cls}" href="${escapeAttr(href)}" rel="noreferrer"` +
-    ` data-s="${escapeAttr(search)}" title="${escapeAttr(leaf.url)}">` +
-    inner +
-    `</a>`
-  );
+  return (h >>> 0).toString(36);
 }
 
-function renderNodes(nodes: readonly BookmarkNode[], depth: number): string {
-  return nodes
-    .map((n) =>
-      n.kind === "leaf" ? leafMarkup(n, "link") : renderFolder(n, depth),
-    )
-    .join("\n");
-}
-
-function renderFolder(node: BookmarkNode & { kind: "folder" }, depth: number): string {
-  // Top two levels open by default; deeper folders start collapsed to stay tidy.
-  const open = depth < 2 ? " open" : "";
-  return [
-    `<details class="folder"${open}>`,
-    `<summary><span class="fname">${escapeHtml(node.title)}</span>` +
-      `<span class="pill">${countLeaves(node)}</span></summary>`,
-    `<div class="kids">`,
-    renderNodes(node.children, depth + 1),
-    `</div>`,
-    `</details>`,
-  ].join("\n");
-}
-
-// Pinned section mimics Arc: top-level pinned links become a favicon-tile grid;
-// any pinned folders render as collapsible lists beneath it.
-function renderPinned(nodes: readonly BookmarkNode[]): string {
-  const leaves = nodes.filter((n): n is BookmarkLeaf => n.kind === "leaf");
-  const folders = nodes.filter((n) => n.kind === "folder");
-  const parts: string[] = [];
-  if (leaves.length > 0) {
-    parts.push(
-      `<div class="grid">`,
-      leaves.map((l) => leafMarkup(l, "tile")).join("\n"),
-      `</div>`,
-    );
-  }
-  if (folders.length > 0) parts.push(renderNodes(folders, 0));
-  return parts.join("\n");
-}
-
-// ---------- accent ----------
-
-// Two CSS color stops for a Space, from Arc's theme when present, else a
-// deterministic hue derived from the title. Values are safe inside a
-// double-quoted style attribute (hex and hsl() contain no double quotes).
-function accentStyle(sp: SpaceConversion): string {
+// Two CSS color stops for a Space: Arc's theme when present, else a
+// deterministic hue from the title. Resolved here so the client needs no Arc
+// color logic.
+function resolveAccent(sp: SpaceConversion): readonly [string, string] {
   const a = sp.accent ?? [];
   const a1 = a[0];
   const a2 = a[1];
-  if (a1 !== undefined && a2 !== undefined) return `--a1:${a1};--a2:${a2}`;
-  if (a1 !== undefined) return `--a1:${a1};--a2:${a1}`;
+  if (a1 !== undefined && a2 !== undefined) return [a1, a2];
+  if (a1 !== undefined) return [a1, a1];
   const h = hashHue(sp.title);
-  return `--a1:hsl(${h} 60% 55%);--a2:hsl(${(h + 28) % 360} 58% 45%)`;
+  return [`hsl(${h} 60% 55%)`, `hsl(${(h + 28) % 360} 58% 45%)`];
 }
 
-function spaceBadge(sp: SpaceConversion): string {
-  return escapeHtml(sp.emoji && sp.emoji.length > 0 ? sp.emoji : monogram(sp.title));
+// ---------- wire payload (the embedded contract) ----------
+
+export type WireNode =
+  | { readonly t: "leaf"; readonly title: string; readonly url: string }
+  | { readonly t: "folder"; readonly title: string; readonly children: readonly WireNode[] };
+
+export interface WireSpace {
+  readonly id: string;
+  readonly title: string;
+  readonly emoji: string;
+  readonly accent: readonly [string, string];
+  readonly pinned: readonly WireNode[];
+  readonly unpinned: readonly WireNode[];
+}
+
+export interface WirePayload {
+  readonly v: 1;
+  readonly title: string;
+  readonly generatedAt: string;
+  // Stable per-document identity (slug of the title), used to namespace the
+  // localStorage working tree. NOT content-derived, so a user's edits survive
+  // re-exporting from Arc into a freshly generated file of the same title.
+  readonly docId: string;
+  readonly spaces: readonly WireSpace[];
+}
+
+function toWireNode(n: BookmarkNode): WireNode {
+  if (n.kind === "leaf") return { t: "leaf", title: n.title, url: n.url };
+  return { t: "folder", title: n.title, children: n.children.map(toWireNode) };
+}
+
+export function buildWirePayload(
+  spaces: readonly SpaceConversion[],
+  opts: RenderPageOptions,
+): WirePayload {
+  const title = opts.title ?? "Arc Spaces";
+  const docId = `${slugify(title)}-${shortHash(spaces.map((s) => s.title).join("\n"))}`;
+  return {
+    v: 1,
+    title,
+    generatedAt: opts.generatedAt,
+    docId,
+    spaces: spaces.map((sp, i) => ({
+      id: `sp-${i}`,
+      title: sp.title,
+      emoji: sp.emoji && sp.emoji.length > 0 ? sp.emoji : monogram(sp.title),
+      accent: resolveAccent(sp),
+      pinned: sp.pinned.map(toWireNode),
+      unpinned: sp.unpinned.map(toWireNode),
+    })),
+  };
+}
+
+// ---------- URL safety ----------
+
+// Schemes that execute script when an href is clicked. Bookmark data can carry
+// these (saved bookmarklets, shared/imported entries), so they must never reach
+// a live href on a file:// page. Mirrored verbatim in the client SAFE_HREF.
+const UNSAFE_SCHEMES = new Set(["javascript:", "data:", "vbscript:"]);
+
+// Returns the URL when safe to place in an href, else undefined. `new URL`
+// normalizes case and strips tab/newline obfuscation, so "JavaScript:" and
+// "java\tscript:" are both caught. Exported for unit testing; the client carries
+// an equivalent copy (kept in sync, covered by the browser path).
+export function safeHref(url: string): string | undefined {
+  try {
+    return UNSAFE_SCHEMES.has(new URL(url).protocol) ? undefined : url;
+  } catch {
+    return undefined;
+  }
 }
 
 // ---------- document ----------
@@ -171,70 +177,10 @@ export function renderPageDocument(
   spaces: readonly SpaceConversion[],
   opts: RenderPageOptions,
 ): string {
-  const docTitle = opts.title ?? "Arc Spaces";
-  const totalLinks = spaces.reduce((n, s) => n + s.bookmarkCount, 0);
+  const payload = buildWirePayload(spaces, opts);
+  const docTitle = payload.title;
 
-  const navItems = spaces
-    .map((sp, i) => {
-      const id = `sp-${i}`;
-      return (
-        `<button class="space-link" type="button" data-space="${id}"` +
-        ` style="${accentStyle(sp)}">` +
-        `<span class="badge">${spaceBadge(sp)}</span>` +
-        `<span class="nm">${escapeHtml(sp.title)}</span>` +
-        `<span class="ct">${sp.bookmarkCount}</span>` +
-        `</button>`
-      );
-    })
-    .join("\n");
-
-  const sections = spaces
-    .map((sp, i) => {
-      const id = `sp-${i}`;
-      const hasPinned = sp.pinned.length > 0;
-      const hasUnpinned = sp.unpinned.length > 0;
-      const sub = `${sp.bookmarkCount} link${sp.bookmarkCount === 1 ? "" : "s"}` +
-        (sp.folderCount > 0
-          ? ` · ${sp.folderCount} folder${sp.folderCount === 1 ? "" : "s"}`
-          : "");
-
-      const groups: string[] = [];
-      if (hasPinned) {
-        groups.push(
-          `<section class="group">` +
-            (hasUnpinned ? `<h2>Pinned</h2>` : "") +
-            renderPinned(sp.pinned) +
-            `</section>`,
-        );
-      }
-      if (hasUnpinned) {
-        groups.push(
-          `<section class="group">` +
-            (hasPinned ? `<h2>Tabs</h2>` : "") +
-            renderNodes(sp.unpinned, 0) +
-            `</section>`,
-        );
-      }
-
-      return [
-        `<section class="space" id="${id}" style="${accentStyle(sp)}">`,
-        `<header class="banner">`,
-        `<span class="emoji">${spaceBadge(sp)}</span>`,
-        `<div class="meta"><h1>${escapeHtml(sp.title)}</h1><p class="sub">${sub}</p></div>`,
-        `</header>`,
-        groups.join("\n"),
-        `</section>`,
-      ].join("\n");
-    })
-    .join("\n");
-
-  const empty =
-    spaces.length === 0
-      ? `<p class="emptydoc">No Spaces with bookmarks were found.</p>`
-      : "";
-
-  return (
-    `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -244,36 +190,27 @@ export function renderPageDocument(
 <style>${STYLE}</style>
 </head>
 <body>
-<aside class="sidebar">
-<div class="brand">${escapeHtml(docTitle)}</div>
-<input id="q" class="search" type="search" placeholder="Search ${totalLinks} links…" autocomplete="off" spellcheck="false" aria-label="Search links">
-<div id="count" class="count" aria-live="polite"></div>
-<nav class="spaces">
-${navItems}
-</nav>
-<div class="foot">Generated ${escapeHtml(opts.generatedAt)} · offline, no tracking</div>
-</aside>
-<main class="content">
-${empty}${sections}
-</main>
+<noscript class="noscript">This Arc Spaces page is interactive and needs JavaScript. Your data is embedded below; nothing is sent anywhere.</noscript>
+<aside class="sidebar" id="sidebar"></aside>
+<main class="content" id="content"></main>
+<script type="application/json" id="arc-data">${embedJson(payload)}</script>
 <script>${SCRIPT}</script>
 </body>
 </html>
-`
-  );
+`;
 }
 
-// ---------- static assets (no interpolation; no backticks, no ${ } ) ----------
+// ---------- static assets (NO interpolation; no backticks, no ${ } inside) ----------
 
 const STYLE = `
 :root{
   --bg:#f6f6f7; --panel:#ffffff; --fg:#1d1d1f; --muted:#6b6b70;
-  --border:#e6e6e9; --hover:#f0f0f2; --radius:12px;
+  --border:#e6e6e9; --hover:#f0f0f2; --accent2:#3b6ef0; --radius:12px;
 }
 @media (prefers-color-scheme: dark){
   :root{
     --bg:#161618; --panel:#1f1f22; --fg:#ececee; --muted:#9a9aa0;
-    --border:#2c2c30; --hover:#27272b;
+    --border:#2c2c30; --hover:#27272b; --accent2:#5b86f5;
   }
 }
 *{box-sizing:border-box}
@@ -284,6 +221,7 @@ body{
   font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   -webkit-font-smoothing:antialiased;
 }
+.noscript{position:fixed; inset:0; padding:24px; background:var(--bg); color:var(--fg); z-index:99;}
 .sidebar{
   display:flex; flex-direction:column; gap:10px; padding:14px 12px;
   border-right:1px solid var(--border); background:var(--panel); overflow:hidden;
@@ -303,6 +241,7 @@ body{
 }
 .space-link:hover{background:var(--hover)}
 .space-link.active{background:var(--hover); box-shadow:inset 3px 0 0 -1px var(--a1)}
+.space-link .key{flex:0 0 auto; font-size:10px; color:var(--muted); width:16px; text-align:right;}
 .badge{
   flex:0 0 auto; width:24px; height:24px; border-radius:7px;
   display:grid; place-items:center; font-size:13px; color:#fff;
@@ -310,12 +249,29 @@ body{
 }
 .space-link .nm{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 .space-link .ct{flex:0 0 auto; font-size:11px; color:var(--muted);}
-.foot{margin-top:auto; font-size:11px; color:var(--muted); padding:6px;}
+.foot{margin-top:auto; display:flex; flex-direction:column; gap:8px; padding:6px;}
+.actions{display:flex; flex-wrap:wrap; gap:6px;}
+.mini{
+  font:inherit; font-size:11.5px; padding:4px 9px; border:1px solid var(--border);
+  border-radius:8px; background:var(--bg); color:var(--fg); cursor:pointer;
+}
+.mini:hover{border-color:var(--muted)}
+.mini.on{background:var(--accent2); border-color:var(--accent2); color:#fff;}
+.legend{font-size:10.5px; color:var(--muted); line-height:1.6;}
+.legend kbd{font:inherit; background:var(--hover); border:1px solid var(--border); border-radius:4px; padding:0 4px;}
 
-.content{overflow-y:auto; padding:24px clamp(16px,4vw,48px);}
+.content{overflow-y:auto; padding:24px clamp(16px,4vw,48px); scroll-behavior:smooth;}
+.bar{
+  max-width:980px; margin:0 auto 16px; padding:10px 14px; border-radius:12px;
+  background:var(--panel); border:1px solid var(--border);
+  display:flex; align-items:center; gap:10px; font-size:12.5px;
+}
+.bar .grow{flex:1}
 .emptydoc{color:var(--muted)}
 .space{display:none; max-width:980px; margin:0 auto;}
 .space.active{display:block}
+body.searching .space{display:block}
+body.allspaces .space{display:block; margin-bottom:30px;}
 
 .banner{
   display:flex; align-items:center; gap:14px; padding:20px 22px; border-radius:16px;
@@ -334,9 +290,17 @@ body{
   font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
   margin:0 0 8px 2px; font-weight:700;
 }
-.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:6px;}
+.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:6px; min-height:8px;}
 
-a.link,a.tile{display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--fg); border-radius:9px;}
+.addrow{display:flex; gap:6px; margin:2px 0 10px;}
+.add-url{
+  flex:1; padding:7px 10px; border:1px dashed var(--border); border-radius:9px;
+  background:transparent; color:var(--fg); font:inherit; font-size:12.5px; outline:none;
+}
+.add-url:focus{border-style:solid; border-color:var(--muted)}
+.add-url.bad{border-color:#e0533a}
+
+a.link,a.tile{position:relative; display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--fg); border-radius:9px;}
 a.link{padding:6px 8px;}
 a.link:hover{background:var(--hover)}
 a.unsafe{opacity:.5; cursor:default}
@@ -346,7 +310,11 @@ a.tile{
 }
 a.tile:hover{border-color:var(--muted)}
 a.tile .t{font-size:12.5px; line-height:1.3; max-height:2.6em; overflow:hidden;}
-a.link .t{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+a.link .t{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.dial{
+  position:absolute; top:6px; right:8px; font-size:10px; color:var(--muted);
+  background:var(--hover); border-radius:5px; padding:0 5px; line-height:1.5;
+}
 
 .fav{
   flex:0 0 auto; width:20px; height:20px; border-radius:6px;
@@ -355,9 +323,19 @@ a.link .t{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 }
 a.tile .fav{width:30px; height:30px; border-radius:8px; font-size:15px;}
 
-details.folder{margin:2px 0}
+.rm{
+  position:absolute; top:4px; right:4px; width:18px; height:18px; line-height:16px;
+  text-align:center; border:0; border-radius:6px; background:var(--hover); color:var(--muted);
+  font-size:13px; cursor:pointer; opacity:0; transition:opacity .1s; z-index:2;
+}
+a.tile .rm{top:6px; right:auto; left:8px;}
+details.folder>.rm{top:7px; right:8px;}
+a:hover .rm, details.folder:hover>.rm{opacity:1}
+.rm:hover{background:#e0533a; color:#fff}
+
+details.folder{margin:2px 0; position:relative}
 details.folder>summary{
-  display:flex; align-items:center; gap:8px; cursor:pointer; list-style:none;
+  position:relative; display:flex; align-items:center; gap:8px; cursor:pointer; list-style:none;
   padding:6px 8px; border-radius:9px; color:var(--fg);
 }
 details.folder>summary::-webkit-details-marker{display:none}
@@ -368,11 +346,16 @@ details.folder>summary::before{
 }
 details.folder[open]>summary::before{transform:rotate(90deg)}
 details.folder>summary:hover{background:var(--hover)}
-.fname{font-weight:600}
-.pill{font-size:11px; color:var(--muted); background:var(--hover); padding:0 7px; border-radius:9px;}
-.kids{padding-left:16px; margin-left:5px; border-left:1px solid var(--border);}
+.fname{font-weight:600; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.pill{font-size:11px; color:var(--muted); background:var(--hover); padding:0 7px; border-radius:9px; margin-right:18px;}
+.kids{padding-left:16px; margin-left:5px; border-left:1px solid var(--border); min-height:6px;}
 
-body.searching .space{display:block}
+[draggable="true"]{cursor:grab}
+.dragging{opacity:.4}
+.di-before{box-shadow:0 -2px 0 0 var(--accent2)}
+.di-after{box-shadow:0 2px 0 0 var(--accent2)}
+.dropzone{outline:2px dashed var(--accent2); outline-offset:-2px; border-radius:9px;}
+
 body.searching .space.empty{display:none}
 body.searching .group.empty{display:none}
 body.searching details.empty{display:none}
@@ -381,80 +364,459 @@ body.searching .miss{display:none}
 
 const SCRIPT = `
 (function(){
-  var body = document.body;
-  var q = document.getElementById('q');
-  var count = document.getElementById('count');
-  var content = document.querySelector('.content');
-  var spaces = Array.prototype.slice.call(document.querySelectorAll('.space'));
-  var navs = Array.prototype.slice.call(document.querySelectorAll('.space-link'));
-  var details = Array.prototype.slice.call(document.querySelectorAll('details'));
-  var wasOpen = null;
+  "use strict";
+  var dataEl = document.getElementById('arc-data');
+  var DATA = JSON.parse(dataEl.textContent);
+  var NS = 'arc:' + DATA.docId;
+  var KEY_TREE = NS + ':tree';
+  var KEY_ACTIVE = NS + ':active';
 
-  function select(id){
-    for(var i=0;i<spaces.length;i++) spaces[i].classList.toggle('active', spaces[i].id===id);
-    for(var j=0;j<navs.length;j++) navs[j].classList.toggle('active', navs[j].getAttribute('data-space')===id);
-    try{ localStorage.setItem('arc-space', id); }catch(e){}
-    if(content) content.scrollTop = 0;
+  // ---- storage helpers (file:// localStorage works in Chromium/Vivaldi) ----
+  function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+  function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+  function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){} }
+  function clone(o){ return JSON.parse(JSON.stringify(o)); }
+
+  // ---- working tree: the editable copy that shadows the embedded export ----
+  // A persisted/imported tree must be shape-valid or we ignore it. A single
+  // malformed Space (missing accent/pinned/unpinned) would otherwise throw
+  // mid-render, leaving a blank, un-recoverable-looking page on every reload.
+  function validTree(t){
+    if(!t || !Array.isArray(t.spaces)) return false;
+    for(var i=0;i<t.spaces.length;i++){
+      var s = t.spaces[i];
+      if(!s || !Array.isArray(s.pinned) || !Array.isArray(s.unpinned) || !s.accent || s.accent.length<2) return false;
+    }
+    return true;
+  }
+  var working = loadWorking();
+  function loadWorking(){
+    var raw = lsGet(KEY_TREE);
+    if(raw){ try{ var t = JSON.parse(raw); if(validTree(t)) return t; }catch(e){} }
+    return clone(DATA);
+  }
+  function persist(){ lsSet(KEY_TREE, JSON.stringify(working)); }
+  function edited(){ return !!lsGet(KEY_TREE); }
+
+  // ---- url safety: mirrors server safeHref() ----
+  var UNSAFE = {'javascript:':1,'data:':1,'vbscript:':1};
+  function safeHref(url){
+    try{ var p = new URL(url).protocol; return UNSAFE[p] ? null : url; }catch(e){ return null; }
+  }
+  function coerceUrl(s){
+    s = (s||'').trim();
+    if(!s) return null;
+    if(!/^[a-z][a-z0-9+.\\-]*:/i.test(s)) s = 'https://' + s;
+    return safeHref(s);
+  }
+  function hostOf(url){ try{ return new URL(url).hostname.replace(/^www\\./,''); }catch(e){ return ''; } }
+  function titleFromUrl(url){ return hostOf(url) || url; }
+
+  // ---- icon tiles (offline; no favicon services) ----
+  function monogram(s){ var m = (s||'').trim().match(/[\\p{L}\\p{N}]/u); return m ? m[0].toUpperCase() : '\\u2022'; }
+  function hashHue(s){ var h=0; for(var i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return h%360; }
+
+  function el(tag, cls, txt){ var e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; return e; }
+  function favTile(seed, label, big){
+    var s = el('span', 'fav', monogram(label));
+    s.style.setProperty('--h', hashHue(seed || label));
+    return s;
   }
 
-  function clearMarks(sel){
-    var els = document.querySelectorAll(sel);
-    for(var i=0;i<els.length;i++) els[i].classList.remove('empty','miss');
+  function countLeaves(n){
+    if(n.t === 'leaf') return 1;
+    var c=0; for(var i=0;i<n.children.length;i++) c+=countLeaves(n.children[i]); return c;
+  }
+  function spaceCount(sp){
+    var c=0, i;
+    for(i=0;i<sp.pinned.length;i++) c+=countLeaves(sp.pinned[i]);
+    for(i=0;i<sp.unpinned.length;i++) c+=countLeaves(sp.unpinned[i]);
+    return c;
+  }
+  function spaceFolders(sp){
+    var c=0;
+    function walk(n){ if(n.t==='folder'){ c++; for(var i=0;i<n.children.length;i++) walk(n.children[i]); } }
+    var i; for(i=0;i<sp.pinned.length;i++) walk(sp.pinned[i]);
+    for(i=0;i<sp.unpinned.length;i++) walk(sp.unpinned[i]);
+    return c;
   }
 
+  // ---- mutation helpers (operate on the working tree by array reference) ----
+  function indexOf(arr, node){ for(var i=0;i<arr.length;i++){ if(arr[i]===node) return i; } return -1; }
+  function isDescendantArr(folder, arr){
+    var stack=[folder];
+    while(stack.length){ var n=stack.pop(); if(n.t==='folder'){ if(n.children===arr) return true; for(var i=0;i<n.children.length;i++) stack.push(n.children[i]); } }
+    return false;
+  }
+  function moveNode(node, srcArr, destArr, refNode, after){
+    if(node===refNode) return; // dropped onto itself: a no-op, not a move-to-end
+    if(node.t==='folder' && (node.children===destArr || isDescendantArr(node, destArr))) return; // no self-nesting
+    var i = indexOf(srcArr, node); if(i<0) return; srcArr.splice(i,1);
+    var idx;
+    if(refNode==null){ idx = destArr.length; }
+    else { idx = indexOf(destArr, refNode); if(idx<0) idx = destArr.length; else if(after) idx++; }
+    destArr.splice(idx,0,node);
+  }
+  function insertLeaf(destArr, refNode, after, leaf){
+    var idx;
+    if(refNode==null){ idx = destArr.length; }
+    else { idx = indexOf(destArr, refNode); if(idx<0) idx = destArr.length; else if(after) idx++; }
+    destArr.splice(idx,0,leaf);
+  }
+
+  // ---- drag state ----
+  var drag = null; // {node, arr}
+  function clearDI(){ var els=document.querySelectorAll('.di-before,.di-after,.dropzone'); for(var i=0;i<els.length;i++) els[i].classList.remove('di-before','di-after','dropzone'); }
+  function dtURL(dt){
+    var u=''; try{ u = dt.getData('text/uri-list') || ''; }catch(e){}
+    if(!u){ try{ u = dt.getData('text/plain') || ''; }catch(e){} }
+    var lines = u.split(/\\r?\\n/);
+    for(var i=0;i<lines.length;i++){ var ln=lines[i].trim(); if(ln && ln.charAt(0)!=='#'){ u=ln; break; } }
+    return coerceUrl(u);
+  }
+  function dtHasItem(dt){ var t=dt.types; if(!t) return false; for(var i=0;i<t.length;i++){ var v=t[i]; if(v==='application/x-arc'||v==='text/uri-list'||v==='text/plain') return true; } return false; }
+
+  function makeDraggable(elm, node, arr){
+    elm.setAttribute('draggable','true');
+    elm.addEventListener('dragstart', function(ev){
+      drag = {node:node, arr:arr};
+      try{
+        ev.dataTransfer.effectAllowed='copyMove';
+        ev.dataTransfer.setData('application/x-arc','1');
+        if(node.t==='leaf' && node.url){ ev.dataTransfer.setData('text/uri-list', node.url); ev.dataTransfer.setData('text/plain', node.url); }
+      }catch(e){}
+      elm.classList.add('dragging');
+    });
+    elm.addEventListener('dragend', function(){ drag=null; clearDI(); elm.classList.remove('dragging'); });
+  }
+  function makeItemDrop(elm, node, arr){
+    elm.addEventListener('dragover', function(ev){
+      if(!drag && !dtHasItem(ev.dataTransfer)) return;
+      ev.preventDefault(); ev.stopPropagation();
+      ev.dataTransfer.dropEffect = drag ? 'move' : 'copy';
+      var r = elm.getBoundingClientRect();
+      var after = (ev.clientY - r.top) > r.height/2;
+      clearDI(); elm.classList.add(after ? 'di-after' : 'di-before');
+    });
+    elm.addEventListener('dragleave', function(){ elm.classList.remove('di-before','di-after'); });
+    elm.addEventListener('drop', function(ev){
+      if(!drag && !dtHasItem(ev.dataTransfer)) return;
+      ev.preventDefault(); ev.stopPropagation();
+      var r = elm.getBoundingClientRect();
+      var after = (ev.clientY - r.top) > r.height/2;
+      if(drag){ moveNode(drag.node, drag.arr, arr, node, after); }
+      else { var u = dtURL(ev.dataTransfer); if(u) insertLeaf(arr, node, after, {t:'leaf', title:titleFromUrl(u), url:u}); }
+      afterEdit();
+    });
+  }
+  function makeContainerDrop(elm, arr){
+    elm._arr = arr;
+    elm.addEventListener('dragover', function(ev){
+      if(!drag && !dtHasItem(ev.dataTransfer)) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = drag ? 'move' : 'copy';
+      if(ev.target===elm) elm.classList.add('dropzone');
+    });
+    elm.addEventListener('dragleave', function(ev){ if(ev.target===elm) elm.classList.remove('dropzone'); });
+    elm.addEventListener('drop', function(ev){
+      if(ev.target!==elm) return; // item-level handlers own precise placement
+      if(!drag && !dtHasItem(ev.dataTransfer)) return;
+      ev.preventDefault();
+      if(drag){ moveNode(drag.node, drag.arr, arr, null, false); }
+      else { var u = dtURL(ev.dataTransfer); if(u) arr.push({t:'leaf', title:titleFromUrl(u), url:u}); }
+      afterEdit();
+    });
+  }
+
+  function removeBtn(arr, node){
+    var b = el('button','rm','\\u00d7'); b.type='button'; b.title='Remove';
+    b.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); var i=indexOf(arr,node); if(i>-1){ arr.splice(i,1); afterEdit(); } });
+    b.addEventListener('dragstart', function(ev){ ev.preventDefault(); ev.stopPropagation(); });
+    return b;
+  }
+
+  // ---- node rendering ----
+  function makeLeaf(node, arr, cls, dialNo){
+    var host = hostOf(node.url);
+    var a = el('a', cls);
+    a.setAttribute('data-s', ((node.title||'') + ' ' + host).toLowerCase());
+    var href = safeHref(node.url);
+    if(href){ a.href = href; a.rel = 'noreferrer noopener'; a.target = '_blank'; a.title = node.url; }
+    else { a.classList.add('unsafe'); a.title = 'blocked scheme \\u2014 ' + node.url; }
+    if(dialNo){ a.appendChild(el('span','dial', String(dialNo))); }
+    a.appendChild(favTile(host, node.title || host));
+    a.appendChild(el('span','t', node.title));
+    a.appendChild(removeBtn(arr, node));
+    makeDraggable(a, node, arr);
+    makeItemDrop(a, node, arr);
+    return a;
+  }
+  function makeFolder(node, arr){
+    var d = el('details','folder'); if(node._open) d.open = true;
+    var sum = el('summary');
+    sum.appendChild(el('span','fname', node.title));
+    sum.appendChild(el('span','pill', String(countLeaves(node))));
+    sum.addEventListener('dblclick', function(ev){ ev.preventDefault(); ev.stopPropagation(); renameNode(node); });
+    d.appendChild(sum);
+    d.appendChild(removeBtn(arr, node)); // sibling of <summary>, not a child: no interactive nesting
+    // Persist real user toggles only. Search force-opens every folder; ignore
+    // those programmatic toggles so a search doesn't rewrite remembered state.
+    d.addEventListener('toggle', function(){ if(document.body.classList.contains('searching')) return; node._open = d.open; persist(); });
+    var kids = el('div','kids');
+    renderInto(kids, node.children);
+    makeContainerDrop(kids, node.children);
+    d.appendChild(kids);
+    makeDraggable(sum, node, arr);
+    makeItemDrop(sum, node, arr);
+    return d;
+  }
+  function renderInto(container, nodes){
+    for(var i=0;i<nodes.length;i++){
+      var n = nodes[i];
+      container.appendChild(n.t==='leaf' ? makeLeaf(n, nodes, 'link') : makeFolder(n, nodes));
+    }
+  }
+  function renderPinned(container, nodes){
+    var leaves=[], folders=[], i;
+    for(i=0;i<nodes.length;i++){ (nodes[i].t==='leaf' ? leaves : folders).push(nodes[i]); }
+    if(leaves.length){
+      var grid = el('div','grid');
+      for(i=0;i<leaves.length;i++){ grid.appendChild(makeLeaf(leaves[i], nodes, 'tile', i<9 ? i+1 : 0)); }
+      makeContainerDrop(grid, nodes);
+      container.appendChild(grid);
+    }
+    if(folders.length){ var wrap=el('div'); renderInto(wrap, folders); container.appendChild(wrap); makeContainerDrop(wrap, nodes); }
+  }
+
+  function renameNode(node){
+    var nv = window.prompt('Rename', node.title);
+    if(nv==null) return;
+    nv = nv.trim(); if(nv){ node.title = nv; afterEdit(); }
+  }
+
+  // ---- content build ----
+  var content = document.getElementById('content');
+  var sidebar = document.getElementById('sidebar');
+  var q, count, nav, allBtn, staleBar;
+  var activeId = lsGet(KEY_ACTIVE);
+  var fullView = false;
+
+  function activeSpace(){ for(var i=0;i<working.spaces.length;i++){ if(working.spaces[i].id===activeId) return working.spaces[i]; } return working.spaces[0]; }
+
+  function renderContent(){
+    content.textContent='';
+    if(staleNeeded()) content.appendChild(buildStaleBar());
+    if(!working.spaces.length){ content.appendChild(el('p','emptydoc','No Spaces with bookmarks were found.')); return; }
+    for(var s=0;s<working.spaces.length;s++){
+      var sp = working.spaces[s];
+      var sec = el('section','space'); sec.id = sp.id;
+      sec.style.setProperty('--a1', sp.accent[0]); sec.style.setProperty('--a2', sp.accent[1]);
+
+      var banner = el('header','banner');
+      banner.appendChild(el('span','emoji', sp.emoji));
+      var meta = el('div','meta'); meta.appendChild(el('h1', null, sp.title));
+      var nL = spaceCount(sp), nF = spaceFolders(sp);
+      var sub = nL + (nL===1?' link':' links') + (nF>0 ? ' \\u00b7 ' + nF + (nF===1?' folder':' folders') : '');
+      meta.appendChild(el('p','sub', sub)); banner.appendChild(meta);
+      sec.appendChild(banner);
+
+      var hasP = sp.pinned.length>0, hasU = sp.unpinned.length>0;
+      if(hasP){ var gp=el('section','group'); if(hasU) gp.appendChild(el('h2',null,'Pinned')); renderPinned(gp, sp.pinned); sec.appendChild(gp); }
+      var gu = el('section','group'); if(hasP && hasU) gu.appendChild(el('h2',null,'Tabs'));
+      gu.appendChild(buildAddRow(sp));
+      var list = el('div'); renderInto(list, sp.unpinned); makeContainerDrop(list, sp.unpinned); gu.appendChild(list);
+      sec.appendChild(gu);
+
+      content.appendChild(sec);
+    }
+    applyActive();
+  }
+
+  function buildAddRow(sp){
+    var row = el('div','addrow');
+    var inp = el('input','add-url'); inp.type='text'; inp.name='add-url'; inp.placeholder='Paste a URL, press Enter to add\\u2026'; inp.autocomplete='off'; inp.spellcheck=false; inp.setAttribute('aria-label','Add a link by URL');
+    function add(){ var u = coerceUrl(inp.value); if(!u){ inp.classList.add('bad'); return; } sp.unpinned.unshift({t:'leaf', title:titleFromUrl(u), url:u}); inp.value=''; afterEdit(); }
+    inp.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); add(); } });
+    inp.addEventListener('input', function(){ inp.classList.remove('bad'); });
+    var b = el('button','mini','Add'); b.type='button'; b.addEventListener('click', add);
+    row.appendChild(inp); row.appendChild(b);
+    return row;
+  }
+
+  // ---- staleness banner: embedded export differs from edited working copy ----
+  function staleNeeded(){ return edited() && working.generatedAt !== DATA.generatedAt; }
+  function buildStaleBar(){
+    var bar = el('div','bar');
+    bar.appendChild(el('span','grow','A newer Arc export is embedded in this file. Your edited copy is from ' + (working.generatedAt||'an earlier export') + '.'));
+    var useNew = el('button','mini','Use new export');
+    useNew.addEventListener('click', function(){ if(!window.confirm('Replace your edited copy with the newer Arc export? Your edits will be discarded.')) return; working = clone(DATA); persist(); rerender(); });
+    var keep = el('button','mini','Keep my edits');
+    keep.addEventListener('click', function(){ working.generatedAt = DATA.generatedAt; persist(); rerender(); });
+    bar.appendChild(useNew); bar.appendChild(keep);
+    return bar;
+  }
+
+  // ---- sidebar (built once; nav + counts refreshed on change) ----
+  function buildShell(){
+    sidebar.textContent='';
+    sidebar.appendChild(el('div','brand', DATA.title));
+    q = el('input','search'); q.type='search'; q.name='search'; q.id='q'; q.placeholder='Search links\\u2026'; q.autocomplete='off'; q.spellcheck=false; q.setAttribute('aria-label','Search links');
+    sidebar.appendChild(q);
+    count = el('div','count'); count.setAttribute('aria-live','polite'); sidebar.appendChild(count);
+    nav = el('nav','spaces'); sidebar.appendChild(nav);
+
+    var foot = el('div','foot');
+    var actions = el('div','actions');
+    allBtn = el('button','mini','Show all'); allBtn.addEventListener('click', toggleFull); actions.appendChild(allBtn);
+    var exp = el('button','mini','Export'); exp.addEventListener('click', exportJson); actions.appendChild(exp);
+    var imp = el('button','mini','Import'); var file = el('input'); file.type='file'; file.accept='application/json,.json'; file.style.display='none';
+    imp.addEventListener('click', function(){ file.click(); }); file.addEventListener('change', importJson); actions.appendChild(imp); actions.appendChild(file);
+    var reset = el('button','mini','Reset'); reset.addEventListener('click', resetAll); actions.appendChild(reset);
+    foot.appendChild(actions);
+    var legend = el('div','legend');
+    legend.appendChild(document.createTextNode('Keys: '));
+    legend.appendChild(kbd('1\\u20139')); legend.appendChild(document.createTextNode(' open pinned \\u00b7 '));
+    legend.appendChild(kbd('\\u26250\\u20139')); legend.appendChild(document.createTextNode(' switch space \\u00b7 '));
+    legend.appendChild(kbd('/')); legend.appendChild(document.createTextNode(' search'));
+    foot.appendChild(legend);
+    sidebar.appendChild(foot);
+
+    q.addEventListener('input', onSearch);
+    q.addEventListener('keydown', function(e){ if(e.key==='Escape'){ q.value=''; exitSearch(); count.textContent=''; } });
+  }
+  function kbd(t){ return el('kbd', null, t); }
+
+  function renderNav(){
+    nav.textContent='';
+    for(var i=0;i<working.spaces.length;i++){
+      (function(sp, idx){
+        var b = el('button','space-link'); b.type='button'; b.setAttribute('data-space', sp.id);
+        b.style.setProperty('--a1', sp.accent[0]); b.style.setProperty('--a2', sp.accent[1]);
+        b.appendChild(el('span','key', idx<9 ? ('\\u2625'+(idx+1)) : ''));
+        b.appendChild(el('span','badge', sp.emoji));
+        b.appendChild(el('span','nm', sp.title));
+        b.appendChild(el('span','ct', String(spaceCount(sp))));
+        b.addEventListener('click', function(){ if(q.value){ q.value=''; exitSearch(); count.textContent=''; } gotoSpace(sp.id); });
+        nav.appendChild(b);
+      })(working.spaces[i], i);
+    }
+  }
+
+  // ---- selection / full view ----
+  function applyActive(){
+    var spaces = content.querySelectorAll('.space');
+    var found=false, i;
+    for(i=0;i<spaces.length;i++){ var on = spaces[i].id===activeId; spaces[i].classList.toggle('active', on); if(on) found=true; }
+    if(!found && spaces.length){ activeId = spaces[0].id; spaces[0].classList.add('active'); }
+    var navs = nav.querySelectorAll('.space-link');
+    for(i=0;i<navs.length;i++) navs[i].classList.toggle('active', navs[i].getAttribute('data-space')===activeId);
+  }
+  function gotoSpace(id){
+    activeId = id; lsSet(KEY_ACTIVE, id); applyActive();
+    if(fullView){ var sec=document.getElementById(id); if(sec) sec.scrollIntoView({block:'start'}); }
+    else { content.scrollTop = 0; }
+  }
+  function toggleFull(){ fullView=!fullView; document.body.classList.toggle('allspaces', fullView); allBtn.classList.toggle('on', fullView); allBtn.textContent = fullView ? 'Show one' : 'Show all'; if(fullView){ var sec=document.getElementById(activeId); if(sec) sec.scrollIntoView({block:'start'}); } }
+
+  // ---- search ----
+  var details, wasOpen=null;
   function exitSearch(){
-    if(!body.classList.contains('searching')) return;
-    body.classList.remove('searching');
-    clearMarks('.miss'); clearMarks('.empty');
-    if(wasOpen){ for(var d=0;d<details.length;d++) details[d].open = wasOpen[d]; wasOpen = null; }
+    if(!document.body.classList.contains('searching')) return;
+    document.body.classList.remove('searching');
+    var els=content.querySelectorAll('.miss,.empty'); for(var i=0;i<els.length;i++) els[i].classList.remove('miss','empty');
+    if(wasOpen){ for(var d=0; d<details.length; d++) details[d].open = wasOpen[d]; wasOpen=null; }
   }
-
   function enterSearch(){
-    if(body.classList.contains('searching')) return;
+    if(document.body.classList.contains('searching')) return;
+    details = Array.prototype.slice.call(content.querySelectorAll('details'));
     wasOpen = details.map(function(d){ return d.open; });
-    for(var d=0;d<details.length;d++) details[d].open = true;
-    body.classList.add('searching');
+    for(var d=0; d<details.length; d++) details[d].open = true;
+    document.body.classList.add('searching');
   }
-
-  for(var i=0;i<navs.length;i++){
-    (function(btn){
-      btn.addEventListener('click', function(){
-        if(q.value){ q.value=''; exitSearch(); count.textContent=''; }
-        select(btn.getAttribute('data-space'));
-      });
-    })(navs[i]);
-  }
-
-  q.addEventListener('input', function(){
+  function onSearch(){
     var term = q.value.trim().toLowerCase();
     if(!term){ exitSearch(); count.textContent=''; return; }
     enterSearch();
-    var total = 0;
-    for(var s=0;s<spaces.length;s++){
-      var sp = spaces[s];
-      var links = sp.querySelectorAll('a.link, a.tile');
-      var n = 0;
-      for(var l=0;l<links.length;l++){
-        var hit = links[l].getAttribute('data-s').indexOf(term) !== -1;
-        links[l].classList.toggle('miss', !hit);
-        if(hit) n++;
-      }
-      var dets = sp.querySelectorAll('details');
-      for(var dd=0;dd<dets.length;dd++)
-        dets[dd].classList.toggle('empty', !dets[dd].querySelector('a.link:not(.miss), a.tile:not(.miss)'));
-      var groups = sp.querySelectorAll('.group');
-      for(var g=0;g<groups.length;g++)
-        groups[g].classList.toggle('empty', !groups[g].querySelector('a.link:not(.miss), a.tile:not(.miss)'));
-      sp.classList.toggle('empty', n===0);
-      total += n;
+    var spaces = content.querySelectorAll('.space'), total=0, s;
+    for(s=0;s<spaces.length;s++){
+      var sp=spaces[s], links=sp.querySelectorAll('a.link, a.tile'), n=0, l;
+      for(l=0;l<links.length;l++){ var hit = links[l].getAttribute('data-s').indexOf(term)!==-1; links[l].classList.toggle('miss', !hit); if(hit) n++; }
+      var dets=sp.querySelectorAll('details'), dd;
+      for(dd=0;dd<dets.length;dd++) dets[dd].classList.toggle('empty', !dets[dd].querySelector('a.link:not(.miss), a.tile:not(.miss)'));
+      var groups=sp.querySelectorAll('.group'), g;
+      for(g=0;g<groups.length;g++) groups[g].classList.toggle('empty', !groups[g].querySelector('a.link:not(.miss), a.tile:not(.miss)'));
+      sp.classList.toggle('empty', n===0); total+=n;
     }
     count.textContent = total + (total===1 ? ' result' : ' results');
+  }
+
+  // ---- export / import / reset ----
+  function download(name, text){
+    var blob = new Blob([text], {type:'application/json'});
+    var url = URL.createObjectURL(blob);
+    var a = el('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 0);
+  }
+  function exportJson(){ download((DATA.docId||'arc-spaces') + '-export.json', JSON.stringify(working, null, 2)); }
+  function importJson(ev){
+    var f = ev.target.files && ev.target.files[0]; if(!f) return;
+    var r = new FileReader();
+    r.onload = function(){ try{ var t = JSON.parse(String(r.result)); if(validTree(t)){ if(!t.generatedAt) t.generatedAt = DATA.generatedAt; working = t; persist(); rerender(); } else { window.alert('Not a valid Arc Spaces export.'); } }catch(e){ window.alert('Could not parse that file.'); } };
+    r.readAsText(f); ev.target.value='';
+  }
+  function resetAll(){
+    if(!window.confirm('Discard your edits and restore the original Arc export?')) return;
+    lsDel(KEY_TREE); working = clone(DATA); rerender();
+  }
+
+  function clearSearch(){ if(document.body.classList.contains('searching')){ q.value=''; exitSearch(); count.textContent=''; } }
+  function afterEdit(){
+    if(!working.generatedAt) working.generatedAt = DATA.generatedAt;
+    persist(); clearDI();
+    rerender();
+  }
+  // Every full rebuild drops search state first: the freshly built DOM carries
+  // no .miss/.empty marks, so leaving body.searching set would show a broken,
+  // half-filtered view. Centralizing here covers edit, import, reset and stale.
+  function rerender(){ clearSearch(); renderNav(); renderContent(); }
+
+  // ---- keyboard ----
+  document.addEventListener('keydown', function(e){
+    var t = e.target, typing = t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable);
+    if(!typing && e.key==='/' && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); q.focus(); return; }
+    var m = /^Digit([0-9])$/.exec(e.code || '');
+    if(!m) return;
+    if(e.metaKey || e.ctrlKey) return; // Cmd/Ctrl+number are browser-reserved (tab switching); don't fight them
+    if(typing) return; // never steal digits while typing (macOS Option+digit types  ™ £ ¢ etc.)
+    var n = parseInt(m[1], 10);
+    if(e.altKey){ // switch space; Alt+0 toggles full view
+      e.preventDefault();
+      if(n===0){ toggleFull(); return; }
+      var sp = working.spaces[n-1]; if(sp) gotoSpace(sp.id);
+      return;
+    }
+    if(n===0) return;
+    e.preventDefault();
+    var sec = document.getElementById(activeId); if(!sec) return;
+    var tiles = sec.querySelectorAll('.grid a.tile');
+    var tile = tiles[n-1]; if(tile && tile.href) tile.click();
   });
 
-  q.addEventListener('keydown', function(e){ if(e.key==='Escape'){ q.value=''; exitSearch(); count.textContent=''; } });
+  // ---- global paste-to-add (when not typing in a field) ----
+  document.addEventListener('paste', function(e){
+    var t = e.target; if(t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable)) return;
+    var txt = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+    var u = coerceUrl(txt); if(!u) return;
+    var sp = activeSpace(); if(!sp) return;
+    e.preventDefault();
+    sp.unpinned.unshift({t:'leaf', title:titleFromUrl(u), url:u}); afterEdit();
+  });
+  // swallow stray drops on the document so a dropped URL never navigates the page away
+  document.addEventListener('dragover', function(e){ if(drag || dtHasItem(e.dataTransfer)) e.preventDefault(); });
+  document.addEventListener('drop', function(e){ if(drag || dtHasItem(e.dataTransfer)) e.preventDefault(); clearDI(); });
 
-  var saved=null; try{ saved=localStorage.getItem('arc-space'); }catch(e){}
-  var has=false; for(var z=0;z<spaces.length;z++){ if(spaces[z].id===saved){ has=true; break; } }
-  select(has ? saved : (spaces[0] ? spaces[0].id : ''));
+  // ---- boot ----
+  buildShell();
+  rerender();
 })();
 `;
