@@ -103,13 +103,18 @@ function resolveAccent(sp: SpaceConversion): readonly [string, string] {
 
 export type WireNode =
   | { readonly t: "leaf"; readonly title: string; readonly url: string }
-  | { readonly t: "folder"; readonly title: string; readonly children: readonly WireNode[] };
+  | { readonly t: "folder"; readonly title: string; readonly children: readonly WireNode[] }
+  // Split view. `o` is "h" (side by side) or "v" (stacked); kept terse because
+  // it ships in every document.
+  | { readonly t: "split"; readonly o: "h" | "v"; readonly children: readonly WireNode[] };
 
 export interface WireSpace {
   readonly id: string;
   readonly title: string;
   readonly emoji: string;
   readonly accent: readonly [string, string];
+  // Arc's per-profile "top apps" icon grid (above the pinned list).
+  readonly favorites: readonly WireNode[];
   readonly pinned: readonly WireNode[];
   readonly unpinned: readonly WireNode[];
 }
@@ -127,6 +132,9 @@ export interface WirePayload {
 
 function toWireNode(n: BookmarkNode): WireNode {
   if (n.kind === "leaf") return { t: "leaf", title: n.title, url: n.url };
+  if (n.kind === "split") {
+    return { t: "split", o: n.orientation === "vertical" ? "v" : "h", children: n.children.map(toWireNode) };
+  }
   return { t: "folder", title: n.title, children: n.children.map(toWireNode) };
 }
 
@@ -146,6 +154,7 @@ export function buildWirePayload(
       title: sp.title,
       emoji: sp.emoji && sp.emoji.length > 0 ? sp.emoji : monogram(sp.title),
       accent: resolveAccent(sp),
+      favorites: (sp.favorites ?? []).map(toWireNode),
       pinned: sp.pinned.map(toWireNode),
       unpinned: sp.unpinned.map(toWireNode),
     })),
@@ -296,6 +305,25 @@ body.allspaces .space{display:block; margin-bottom:30px;}
   margin:0 0 8px 2px; font-weight:700;
 }
 .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-bottom:6px; min-height:8px;}
+.favgrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(66px,1fr)); gap:8px; margin-bottom:6px; min-height:8px;}
+a.favtile{
+  position:relative; display:flex; flex-direction:column; align-items:center; gap:6px;
+  padding:9px 6px; text-align:center; text-decoration:none; color:var(--fg);
+  background:var(--panel); border:1px solid var(--border); border-radius:9px; min-height:64px;
+}
+a.favtile:hover{border-color:var(--muted)}
+a.favtile .fav{width:30px; height:30px; border-radius:8px; font-size:15px;}
+a.favtile .t{font-size:10.5px; line-height:1.25; max-height:2.5em; overflow:hidden; color:var(--muted); width:100%; white-space:normal; word-break:break-word;}
+a.favtile .rm{top:3px; right:3px; left:auto;}
+
+.split{position:relative; border:1px solid var(--border); border-left:3px solid var(--a1); border-radius:9px; padding:8px 8px 4px; margin:2px 0;}
+.split>.split-h{display:flex; align-items:center; gap:6px; font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 6px 2px;}
+.split>.panes{display:flex; gap:8px;}
+.split.vert>.panes{flex-direction:column;}
+.split .pane{flex:1 1 0; min-width:0; border:1px dashed var(--border); border-radius:8px; padding:3px;}
+.split>.rm{top:6px; right:6px;}
+
+.rove{outline:2px solid var(--accent2) !important; outline-offset:1px; border-radius:9px;}
 
 .addrow{display:flex; gap:6px; margin:2px 0 10px;}
 .add-url{
@@ -415,6 +443,11 @@ const SCRIPT = `
       for(var i=0;i<n.children.length;i++){ if(!validNode(n.children[i], depth+1)) return false; }
       return true;
     }
+    if(n.t==='split'){
+      if(!Array.isArray(n.children)) return false;
+      for(var j=0;j<n.children.length;j++){ if(!validNode(n.children[j], depth+1)) return false; }
+      return true;
+    }
     return false;
   }
   function validTree(t){
@@ -424,15 +457,23 @@ const SCRIPT = `
       if(!s || typeof s.id!=='string' || !s.id) return false;
       if(!Array.isArray(s.pinned) || !Array.isArray(s.unpinned)) return false;
       if(!Array.isArray(s.accent) || s.accent.length<2 || !validColor(s.accent[0]) || !validColor(s.accent[1])) return false;
+      // favorites is optional (older exports predate it); when present it must be valid.
+      if(s.favorites!==undefined){
+        if(!Array.isArray(s.favorites)) return false;
+        for(var f=0;f<s.favorites.length;f++){ if(!validNode(s.favorites[f], 0)) return false; }
+      }
       for(var p=0;p<s.pinned.length;p++){ if(!validNode(s.pinned[p], 0)) return false; }
       for(var u=0;u<s.unpinned.length;u++){ if(!validNode(s.unpinned[u], 0)) return false; }
     }
     return true;
   }
+  // Backfill a favorites array onto any Space that lacks one, so the rest of the
+  // app can treat it as always-present (older imports, hand-edited files).
+  function normTree(t){ for(var i=0;i<t.spaces.length;i++){ if(!Array.isArray(t.spaces[i].favorites)) t.spaces[i].favorites=[]; } return t; }
   var working = loadWorking();
   function loadWorking(){
     var raw = lsGet(KEY_TREE);
-    if(raw){ try{ var t = JSON.parse(raw); if(validTree(t)) return t; }catch(e){} }
+    if(raw){ try{ var t = JSON.parse(raw); if(validTree(t)) return normTree(t); }catch(e){} }
     return clone(DATA);
   }
   function persist(){ if(!lsSet(KEY_TREE, JSON.stringify(working))) storageFailed = true; }
@@ -483,7 +524,10 @@ const SCRIPT = `
   }
   function spaceFolders(sp){
     var c=0;
-    function walk(n){ if(n.t==='folder'){ c++; for(var i=0;i<n.children.length;i++) walk(n.children[i]); } }
+    function walk(n){
+      if(n.t==='folder'){ c++; for(var i=0;i<n.children.length;i++) walk(n.children[i]); }
+      else if(n.t==='split'){ for(var j=0;j<n.children.length;j++) walk(n.children[j]); }
+    }
     var i; for(i=0;i<sp.pinned.length;i++) walk(sp.pinned[i]);
     for(i=0;i<sp.unpinned.length;i++) walk(sp.unpinned[i]);
     return c;
@@ -615,10 +659,46 @@ const SCRIPT = `
     makeItemDrop(sum, node, arr);
     return d;
   }
+  function nodeEl(n, arr, leafCls){
+    if(n.t==='leaf') return makeLeaf(n, arr, leafCls || 'link');
+    if(n.t==='split') return makeSplit(n, arr);
+    return makeFolder(n, arr);
+  }
   function renderInto(container, nodes){
-    for(var i=0;i<nodes.length;i++){
-      var n = nodes[i];
-      container.appendChild(n.t==='leaf' ? makeLeaf(n, nodes, 'link') : makeFolder(n, nodes));
+    for(var i=0;i<nodes.length;i++){ container.appendChild(nodeEl(nodes[i], nodes)); }
+  }
+  // A split view: its panes shown together (side by side or stacked). The header
+  // row is the drag/drop handle so panes keep their own per-item drag behaviour.
+  function makeSplit(node, arr){
+    var d = el('div','split' + (node.o==='v' ? ' vert' : ''));
+    var h = el('div','split-h');
+    h.appendChild(el('span',null,'\\u25a3'));
+    h.appendChild(el('span',null, node.o==='v' ? 'Split \\u00b7 stacked' : 'Split \\u00b7 side by side'));
+    d.appendChild(h);
+    var panes = el('div','panes');
+    for(var i=0;i<node.children.length;i++){
+      var pane = el('div','pane');
+      pane.appendChild(nodeEl(node.children[i], node.children));
+      panes.appendChild(pane);
+    }
+    d.appendChild(panes);
+    d.appendChild(removeBtn(arr, node));
+    makeDraggable(h, node, arr);
+    makeItemDrop(h, node, arr);
+    return d;
+  }
+  // Favorites: Arc's per-profile top-app grid. Flat tabs render as compact
+  // squares; any (rare) folder/split favorite falls back to a normal row below.
+  function renderFavorites(container, nodes){
+    var grid = el('div','favgrid'), i;
+    for(i=0;i<nodes.length;i++){ if(nodes[i].t==='leaf') grid.appendChild(makeLeaf(nodes[i], nodes, 'favtile')); }
+    makeContainerDrop(grid, nodes);
+    container.appendChild(grid);
+    var hasOther=false; for(i=0;i<nodes.length;i++){ if(nodes[i].t!=='leaf'){ hasOther=true; break; } }
+    if(hasOther){
+      var wrap=el('div');
+      for(i=0;i<nodes.length;i++){ if(nodes[i].t!=='leaf') wrap.appendChild(nodeEl(nodes[i], nodes)); }
+      container.appendChild(wrap); makeContainerDrop(wrap, nodes);
     }
   }
   function renderPinned(container, nodes){
@@ -674,6 +754,8 @@ const SCRIPT = `
       meta.appendChild(el('p','sub', sub)); banner.appendChild(meta);
       sec.appendChild(banner);
 
+      var fav = sp.favorites||[];
+      if(fav.length){ var gf=el('section','group'); gf.appendChild(el('h2',null,'Favorites')); renderFavorites(gf, fav); sec.appendChild(gf); }
       var hasP = sp.pinned.length>0, hasU = sp.unpinned.length>0;
       if(hasP){ var gp=el('section','group'); if(hasU) gp.appendChild(el('h2',null,'Pinned')); renderPinned(gp, sp.pinned); sec.appendChild(gp); }
       var gu = el('section','group'); if(hasP && hasU) gu.appendChild(el('h2',null,'Tabs'));
@@ -749,6 +831,8 @@ const SCRIPT = `
       [['1\\u20139'], 'Open pinned'],
       [['\\u23251\\u20139'], 'Switch Space'],
       [['\\u23250'], 'Show all Spaces'],
+      [['\\u2191\\u2193'], 'Move focus'],
+      [['\\u2190\\u2192'], 'Prev/next Space'],
       [['Paste','Drop'], 'Add a link']
     ];
     for(var ci=0; ci<cheats.length; ci++){
@@ -797,6 +881,50 @@ const SCRIPT = `
   }
   function toggleFull(){ fullView=!fullView; document.body.classList.toggle('allspaces', fullView); allBtn.classList.toggle('on', fullView); allBtn.textContent = fullView ? 'Show one' : 'Show all'; if(fullView){ var sec=document.getElementById(activeId); if(sec) sec.scrollIntoView({block:'start'}); } }
 
+  // ---- roving keyboard navigation (\\u2191\\u2193 between links, \\u2190\\u2192 between Spaces) ----
+  // Drives both the single-Space and the all-Spaces ("Show all") vertical view.
+  var roveEl = null;
+  function focusList(){
+    var all = content.querySelectorAll('a.favtile, a.tile, a.link, details.folder>summary'), out=[], i;
+    // offsetParent===null skips items in a hidden Space or a collapsed folder.
+    for(i=0;i<all.length;i++){ if(all[i].classList.contains('miss')) continue; if(all[i].offsetParent===null) continue; out.push(all[i]); }
+    return out;
+  }
+  function setRove(e){
+    if(roveEl && roveEl!==e) roveEl.classList.remove('rove');
+    roveEl = e; e.classList.add('rove');
+    try{ e.focus({preventScroll:true}); }catch(_e){ e.focus(); }
+    e.scrollIntoView({block:'nearest'});
+  }
+  function rove(dir){
+    var list = focusList(); if(!list.length) return;
+    var idx = list.indexOf(document.activeElement);
+    if(idx<0 && roveEl) idx = list.indexOf(roveEl);
+    if(idx<0){ setRove(dir>0 ? list[0] : list[list.length-1]); return; }
+    var ni = idx + dir; if(ni<0) ni=0; if(ni>=list.length) ni=list.length-1;
+    setRove(list[ni]);
+  }
+  function spaceIndex(id){ for(var i=0;i<working.spaces.length;i++){ if(working.spaces[i].id===id) return i; } return -1; }
+  function firstFocusable(sec){ return sec.querySelector('a.favtile, a.tile, a.link, details.folder>summary'); }
+  function closestSpace(e){ while(e && e!==content){ if(e.classList && e.classList.contains('space')) return e; e=e.parentNode; } return null; }
+  function visibleSpaces(){ var secs=content.querySelectorAll('.space'), out=[], i; for(i=0;i<secs.length;i++){ if(secs[i].offsetParent!==null) out.push(secs[i]); } return out; }
+  function roveSpace(dir){
+    if(!fullView){
+      // Single view: \\u2190\\u2192 switches the active Space, then focuses its first item.
+      var ci = spaceIndex(activeId); if(ci<0) ci=0;
+      var ni = ci+dir; if(ni<0 || ni>=working.spaces.length) return;
+      gotoSpace(working.spaces[ni].id);
+      var sec = document.getElementById(working.spaces[ni].id), f = sec && firstFocusable(sec);
+      if(f) setRove(f);
+      return;
+    }
+    var vs = visibleSpaces(); if(!vs.length) return;
+    var cur = roveEl ? closestSpace(roveEl) : null;
+    var idx = Array.prototype.indexOf.call(vs, cur);
+    var n2 = (idx<0 ? 0 : idx+dir); if(n2<0) n2=0; if(n2>=vs.length) n2=vs.length-1;
+    var f2 = firstFocusable(vs[n2]); if(f2) setRove(f2); else vs[n2].scrollIntoView({block:'start'});
+  }
+
   // ---- search ----
   var details, wasOpen=null;
   function exitSearch(){
@@ -818,12 +946,12 @@ const SCRIPT = `
     enterSearch();
     var spaces = content.querySelectorAll('.space'), total=0, s;
     for(s=0;s<spaces.length;s++){
-      var sp=spaces[s], links=sp.querySelectorAll('a.link, a.tile'), n=0, l;
+      var sp=spaces[s], links=sp.querySelectorAll('a.link, a.tile, a.favtile'), n=0, l;
       for(l=0;l<links.length;l++){ var hit = links[l].getAttribute('data-s').indexOf(term)!==-1; links[l].classList.toggle('miss', !hit); if(hit) n++; }
       var dets=sp.querySelectorAll('details'), dd;
-      for(dd=0;dd<dets.length;dd++) dets[dd].classList.toggle('empty', !dets[dd].querySelector('a.link:not(.miss), a.tile:not(.miss)'));
+      for(dd=0;dd<dets.length;dd++) dets[dd].classList.toggle('empty', !dets[dd].querySelector('a.link:not(.miss), a.tile:not(.miss), a.favtile:not(.miss)'));
       var groups=sp.querySelectorAll('.group'), g;
-      for(g=0;g<groups.length;g++) groups[g].classList.toggle('empty', !groups[g].querySelector('a.link:not(.miss), a.tile:not(.miss)'));
+      for(g=0;g<groups.length;g++) groups[g].classList.toggle('empty', !groups[g].querySelector('a.link:not(.miss), a.tile:not(.miss), a.favtile:not(.miss)'));
       sp.classList.toggle('empty', n===0); total+=n;
     }
     count.textContent = total + (total===1 ? ' result' : ' results');
@@ -847,7 +975,7 @@ const SCRIPT = `
         if(!validTree(t)){ window.alert('Not a valid SpArca export.'); return; }
         if(t.docId && DATA.docId && t.docId !== DATA.docId && !window.confirm('That file was exported from a different document. Import it over this one anyway?')) return;
         if(!t.generatedAt) t.generatedAt = DATA.generatedAt;
-        working = t; persist(); rerender();
+        working = normTree(t); persist(); rerender();
       }catch(e){ window.alert('Could not parse that file.'); }
     };
     r.readAsText(f); ev.target.value='';
@@ -869,12 +997,18 @@ const SCRIPT = `
   // Every full rebuild drops search state first: the freshly built DOM carries
   // no .miss/.empty marks, so leaving body.searching set would show a broken,
   // half-filtered view. Centralizing here covers edit, import, reset and stale.
-  function rerender(){ clearSearch(); renderNav(); renderContent(); }
+  function rerender(){ clearSearch(); roveEl=null; renderNav(); renderContent(); }
 
   // ---- keyboard ----
   document.addEventListener('keydown', function(e){
     var t = e.target, typing = t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable);
     if(!typing && e.key==='/' && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); q.focus(); return; }
+    if(!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey){
+      if(e.key==='ArrowDown'){ e.preventDefault(); rove(1); return; }
+      if(e.key==='ArrowUp'){ e.preventDefault(); rove(-1); return; }
+      if(e.key==='ArrowRight'){ e.preventDefault(); roveSpace(1); return; }
+      if(e.key==='ArrowLeft'){ e.preventDefault(); roveSpace(-1); return; }
+    }
     var m = /^Digit([0-9])$/.exec(e.code || '');
     if(!m) return;
     if(e.metaKey || e.ctrlKey) return; // Cmd/Ctrl+number are browser-reserved (tab switching); don't fight them

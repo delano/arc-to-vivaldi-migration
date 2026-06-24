@@ -94,9 +94,16 @@ npx tsx arc-to-vivaldi.ts --page --split --output ./out
 What you get:
 
 - A left sidebar of Spaces (with their original emoji and accent color), a
-  per-Space gradient banner, a pinned-tile grid, and collapsible folders —
-  links kept in the exact order Arc showed them.
-- A search box that filters links across every Space at once.
+  per-Space gradient banner, and collapsible folders — links kept in the exact
+  order Arc showed them.
+- Arc's two-tier layout per Space: the per-profile **Favorites** icon grid (Arc's
+  "top apps", shared across Spaces on the same profile) above the **Pinned** tile
+  grid, then the open tabs.
+- **Split views** preserved as labeled side-by-side (or stacked) panes rather
+  than flattened into a folder.
+- A search box that filters links across every Space at once, and a "Show all"
+  vertical view of every Space with arrow-key navigation (↑↓ move between links,
+  ←→ hop between Spaces).
 - Light and dark themes (follows your OS setting).
 
 **Offline and private by construction.** The page makes **zero** third-party

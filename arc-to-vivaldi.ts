@@ -30,6 +30,7 @@ import type {
   ArcTabData,
   BookmarkNode,
   SpaceConversion,
+  SplitOrientation,
 } from "./lib/types.js";
 import { parseArgs } from "./lib/cli.js";
 import { buildInjectablePayload } from "./lib/payload.js";
@@ -133,6 +134,38 @@ interface ParsedSidebar {
   readonly spaces: ReadonlyMap<string, ArcSpace>;
   readonly items: ReadonlyMap<string, ArcItem>;
   readonly spaceOrder: readonly string[];
+  // profileKey -> container root id of that profile's "top apps" Favorites grid.
+  readonly topAppsByProfile: ReadonlyMap<string, string>;
+}
+
+// Canonical key for an Arc profile marker. Marker shapes: `{ default: true }`
+// or `{ custom: { _0: { machineID, directoryBasename } } }`. The same shapes
+// appear in a Space's `profile` and in `topAppsContainerIDs`, so a shared key
+// joins a Space to its Favorites grid.
+function profileKeyOf(marker: unknown): string | undefined {
+  if (!isRecord(marker)) return undefined;
+  if (marker["default"] === true) return "default";
+  const custom = marker["custom"];
+  if (isRecord(custom)) {
+    const inner = custom["_0"];
+    if (isRecord(inner)) {
+      const dir = asString(inner["directoryBasename"]);
+      if (dir) return `${asString(inner["machineID"]) ?? ""}/${dir}`;
+    }
+  }
+  return undefined;
+}
+
+// topAppsContainerIDs is an alternating [profileMarker, rootId, ...] array.
+function extractTopApps(raw: unknown): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!Array.isArray(raw)) return map;
+  for (let i = 0; i + 1 < raw.length; i += 2) {
+    const key = profileKeyOf(raw[i]);
+    const id = raw[i + 1];
+    if (key && typeof id === "string" && !map.has(key)) map.set(key, id);
+  }
+  return map;
 }
 
 function parseSidebar(raw: unknown): ParsedSidebar {
@@ -156,6 +189,7 @@ function parseSidebar(raw: unknown): ParsedSidebar {
     spaces: spacesPaired.map,
     items: itemsPaired.map,
     spaceOrder: spacesPaired.order,
+    topAppsByProfile: extractTopApps(real["topAppsContainerIDs"]),
   };
 }
 
@@ -212,7 +246,8 @@ function narrowSpace(v: unknown, id: string): ArcSpace | undefined {
     }
   }
   const accent = extractAccentStops(customInfoRaw);
-  return { id, title, customInfo, newContainerIDs, accent };
+  const profileKey = profileKeyOf(v["profile"]);
+  return { id, title, customInfo, newContainerIDs, accent, profileKey };
 }
 
 function narrowItem(v: unknown, id: string): ArcItem | undefined {
@@ -234,6 +269,7 @@ function narrowItem(v: unknown, id: string): ArcItem | undefined {
 
   let tab: ArcTabData | undefined;
   let isList = false;
+  let splitOrientation: SplitOrientation | undefined;
   const dataRaw = v["data"];
   if (isRecord(dataRaw)) {
     const tabRaw = dataRaw["tab"];
@@ -244,8 +280,15 @@ function narrowItem(v: unknown, id: string): ArcItem | undefined {
       };
     }
     isList = "list" in dataRaw;
+    const splitRaw = dataRaw["splitView"];
+    if (isRecord(splitRaw)) {
+      splitOrientation =
+        asString(splitRaw["layoutOrientation"]) === "vertical"
+          ? "vertical"
+          : "horizontal";
+    }
   }
-  return { id, title, parentID, childrenIds, data: { tab, isList } };
+  return { id, title, parentID, childrenIds, data: { tab, isList, splitOrientation } };
 }
 
 // ---------- Container root extraction ----------
@@ -324,6 +367,16 @@ function walkChildren(
       // Orphan: neither URL nor children with content. Drop quietly.
       continue;
     }
+    if (child.data.splitOrientation !== undefined) {
+      // A split view: keep its panes grouped (not flattened into a plain
+      // "Untitled" folder) so the page can render them side by side.
+      nodes.push({
+        kind: "split",
+        orientation: child.data.splitOrientation,
+        children: grandchildren,
+      });
+      continue;
+    }
     const rawTitle = child.title?.trim();
     const folderTitle = (rawTitle && rawTitle.length > 0) ? rawTitle : "Untitled";
     nodes.push({ kind: "folder", title: folderTitle, children: grandchildren });
@@ -341,6 +394,9 @@ function renderTree(nodes: readonly BookmarkNode[], indent: number): string {
   for (const n of nodes) {
     if (n.kind === "leaf") {
       lines.push(`${childPad}<DT><A HREF="${htmlEscape(n.url)}">${htmlEscape(n.title)}</A>`);
+    } else if (n.kind === "split") {
+      lines.push(`${childPad}<DT><H3>Split (${n.orientation})</H3>`);
+      lines.push(renderTree(n.children, indent + 1));
     } else {
       lines.push(`${childPad}<DT><H3>${htmlEscape(n.title)}</H3>`);
       lines.push(renderTree(n.children, indent + 1));
@@ -424,7 +480,7 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const { spaces, items, spaceOrder } = parseSidebar(parsed);
+  const { spaces, items, spaceOrder, topAppsByProfile } = parseSidebar(parsed);
 
   let untitledCounter = 0;
   let totalBookmarks = 0;
@@ -444,11 +500,20 @@ async function main(): Promise<number> {
       warn(`space "${title}" has no bookmarks; skipping`);
       continue;
     }
+    // Favorites (the per-profile "top apps" icon grid) walk a separate root with
+    // their own visited set and a throwaway stat tally: profile-shared, so they
+    // must not inflate this Space's bookmark/folder counts.
+    const favRoot = space.profileKey !== undefined
+      ? topAppsByProfile.get(space.profileKey)
+      : undefined;
+    const favStats: BuildStats = { bookmarks: 0, folders: 0 };
+    const favorites = buildSubtree(favRoot, items, favStats, new Set<string>());
     conversions.push({
       title,
       iconHint: space.customInfo?.iconType?.icon,
       emoji: space.customInfo?.iconType?.emoji,
       accent: space.accent,
+      favorites: favorites.length > 0 ? favorites : undefined,
       pinned,
       unpinned,
       bookmarkCount: stats.bookmarks,

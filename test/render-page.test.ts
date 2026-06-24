@@ -218,3 +218,65 @@ test("renderPageDocument: ships the hardened client (validation, recovery, share
   ok(html.includes("Shortcuts"), "sidebar ships the shortcuts cheatsheet");
   ok(!html.includes("\\u2625"), "option-key hint is U+2325 (⌥), not the U+2625 ankh");
 });
+
+// ---- Arc two-tier layout: favorites grid + split tabs + arrow-key nav ----
+
+const split = (children: readonly BookmarkNode[]): BookmarkNode => ({
+  kind: "split",
+  orientation: "horizontal",
+  children,
+});
+
+const twoTier: readonly SpaceConversion[] = [
+  {
+    title: "Onetime",
+    iconHint: "terminal",
+    emoji: "🔐",
+    accent: ["#112233", "#445566"],
+    favorites: [leaf("Mail", "https://mail.example/"), leaf("Cal", "https://cal.example/")],
+    pinned: [
+      leaf("Home", "https://home.example/"),
+      split([leaf("Left", "https://left.example/"), leaf("Right", "https://right.example/")]),
+    ],
+    unpinned: [leaf("Tab", "https://tab.example/")],
+    bookmarkCount: 4,
+    folderCount: 0,
+  },
+];
+
+test("buildWirePayload: carries the favorites grid as its own tier", () => {
+  const p = buildWirePayload(twoTier, opts);
+  const sp = p.spaces[0];
+  deepStrictEqual(sp.favorites.map((n) => n.t), ["leaf", "leaf"]);
+  strictEqual((sp.favorites[0] as { url: string }).url, "https://mail.example/");
+  // Favorites are profile-shared and must NOT be folded into pinned/unpinned.
+  strictEqual(sp.pinned.length, 2);
+});
+
+test("buildWirePayload: a Space with no favorites still emits an empty array", () => {
+  const p = buildWirePayload(sample, opts);
+  // sample has no `favorites` field; the wire contract normalizes it to [].
+  deepStrictEqual(p.spaces[0].favorites, []);
+  deepStrictEqual(p.spaces[1].favorites, []);
+});
+
+test("buildWirePayload: split view survives as a {t:'split'} node with panes", () => {
+  const p = buildWirePayload(twoTier, opts);
+  const node = p.spaces[0].pinned[1] as { t: string; o: string; children: { t: string; url?: string }[] };
+  strictEqual(node.t, "split");
+  strictEqual(node.o, "h", "horizontal orientation encodes as 'h'");
+  deepStrictEqual(node.children.map((c) => c.url), [
+    "https://left.example/",
+    "https://right.example/",
+  ]);
+});
+
+test("renderPageDocument: ships favorites, split, and arrow-key navigation", () => {
+  const html = renderPageDocument(twoTier, opts);
+  ok(html.includes("renderFavorites") && html.includes("favgrid"),
+    "client builds the per-profile favorites grid");
+  ok(html.includes("makeSplit") && html.includes("Split \\u00b7 side by side"),
+    "client renders split views as labeled side-by-side panes");
+  ok(html.includes("ArrowDown") && html.includes("ArrowRight") && html.includes("function rove"),
+    "client wires roving arrow-key navigation for the all-spaces view");
+});

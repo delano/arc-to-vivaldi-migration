@@ -18,6 +18,9 @@ export interface ArcSpace {
   // Derived at the boundary from customInfo.windowTheme: 0, 1, or 2 sRGB hex
   // stops describing the Space's accent. Empty when Arc stored no theme.
   readonly accent: readonly string[];
+  // Canonical key for the Chromium profile backing this Space, used to look up
+  // the per-profile "top apps" Favorites grid. "default" or "<machineID>/<dir>".
+  readonly profileKey: string | undefined;
 }
 
 export interface ArcTabData {
@@ -25,9 +28,14 @@ export interface ArcTabData {
   readonly savedTitle: string | undefined;
 }
 
+export type SplitOrientation = "horizontal" | "vertical";
+
 export interface ArcItemData {
   readonly tab: ArcTabData | undefined;
   readonly isList: boolean;
+  // Arc "split view" item: a container whose children are the side-by-side (or
+  // stacked) panes. Distinguished by a `data.splitView` key.
+  readonly splitOrientation: SplitOrientation | undefined;
 }
 
 export interface ArcItem {
@@ -51,7 +59,16 @@ export interface BookmarkFolder {
   readonly children: readonly BookmarkNode[];
 }
 
-export type BookmarkNode = BookmarkLeaf | BookmarkFolder;
+// An Arc split view: two-or-more panes shown together. Preserved as its own kind
+// so the standalone page can render the panes side by side; the flat Netscape
+// HTML and JS-injector paths just recurse into its panes like a folder.
+export interface BookmarkSplit {
+  readonly kind: "split";
+  readonly orientation: SplitOrientation;
+  readonly children: readonly BookmarkNode[];
+}
+
+export type BookmarkNode = BookmarkLeaf | BookmarkFolder | BookmarkSplit;
 
 export interface SpaceConversion {
   readonly title: string;
@@ -64,6 +81,9 @@ export interface SpaceConversion {
   // (--page). Absent for the Netscape HTML and JS-injector paths.
   readonly emoji?: string;
   readonly accent?: readonly string[];
+  // Arc's per-profile "top apps" Favorites grid (the icon row above the pinned
+  // list). Profile-shared: Spaces on the same Arc profile carry the same grid.
+  readonly favorites?: readonly BookmarkNode[];
 }
 
 // Data embedded into the inject script.

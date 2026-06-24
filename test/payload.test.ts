@@ -15,6 +15,26 @@ const folder = (title: string, children: readonly BookmarkNode[]): BookmarkNode 
   children,
 });
 
+const split = (children: readonly BookmarkNode[]): BookmarkNode => ({
+  kind: "split",
+  orientation: "horizontal",
+  children,
+});
+
+test("flattenLeaves: recurses split panes so the injector keeps both tabs", () => {
+  const tree: readonly BookmarkNode[] = [
+    leaf("A", "https://a"),
+    split([leaf("L", "https://left"), leaf("R", "https://right")]),
+    leaf("D", "https://d"),
+  ];
+  deepStrictEqual(flattenLeaves(tree), [
+    { title: "A", url: "https://a" },
+    { title: "L", url: "https://left" },
+    { title: "R", url: "https://right" },
+    { title: "D", url: "https://d" },
+  ]);
+});
+
 test("flattenLeaves: depth-first preserves order", () => {
   const tree: readonly BookmarkNode[] = [
     leaf("A", "https://a"),
