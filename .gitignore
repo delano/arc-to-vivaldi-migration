@@ -7,6 +7,10 @@ sparca.html
 sparca.json
 split/
 
+# Browser-verification screenshots capture the rendered page, so they embed real
+# tab titles + URLs; never commit them.
+.shots/
+
 # Generated DevTools scripts and probe captures — they embed real tab URLs,
 # workspace names, and other personal browsing data; never commit them.
 vivaldi-import.js

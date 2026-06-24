@@ -100,19 +100,23 @@ What you get:
 - Arc's two-tier layout per Space: the per-profile **Favorites** icon grid (Arc's
   "top apps", shared across Spaces on the same profile) above the **Pinned** tile
   grid, then the open tabs.
-- **Split views** preserved as labeled side-by-side (or stacked) panes rather
-  than flattened into a folder.
-- A search box that filters links across every Space at once, plus a "Show all"
-  view of every Space. That view has two layouts: **long** (stacked) and **wide**
-  (each Space its own column, one row of columns); the choice is remembered.
-- Keyboard navigation: `/` to search, `↑↓` to move between links and `←→` to hop
-  between Spaces (fine), and `Tab` to cycle coarsely (search → each Space's first
-  link → the Show all / Export / Import / Reset actions → back to search). `1`–`9`
-  open pinned tiles; `⌥1`–`9` switch Space; `⌥0` toggles Show all.
+- **Split views** preserved as side-by-side (or stacked) panes — flat, with a
+  faint divider between them (Arc-style), rather than flattened into a folder.
+- A search box that filters links across every Space at once — as you type,
+  matching links are foregrounded and the surrounding structure (folder names,
+  Space banners, counts) recedes so the matches stand out. Plus a "Show all"
+  view of every Space, with two layouts: **long** (stacked) and **wide** (each
+  Space its own column, one row of columns); the choice is remembered.
+- Keyboard navigation: `/` to search; `↑↓` and `←→` move within the active Space
+  (`←→` hops across grid columns); `Tab` / `Shift+Tab` switch Spaces and cycle
+  coarsely through the Show all / Export / Import / Reset actions. `1`–`9` open
+  pinned tiles; `⌥1`–`9` switch Space; `⌥0` toggles Show all; `u` shows each
+  link's URL (hostname emphasized); `t` cycles the theme.
 - Optional **real favicons** (`--favicons`): fetched once at generation time and
   embedded inline, with a colored monogram tile as the fallback for any site
   whose icon can't be resolved.
-- Light and dark themes (follows your OS setting).
+- Dark, sepia, and system themes — press `t` to cycle; **system** follows your OS
+  setting, and your choice is remembered.
 
 **Offline and private by construction.** The page makes **zero** third-party
 requests when opened — no favicon services, web fonts, CDNs, or trackers. Site
