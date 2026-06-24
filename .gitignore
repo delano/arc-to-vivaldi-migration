@@ -1,7 +1,10 @@
 node_modules/
 
-# Generated bookmark output
+# Generated bookmark/page output — embeds real URLs + titles; never commit
 arc-*.html
+arc-*.json
+sparca.html
+sparca.json
 split/
 
 # Generated DevTools scripts and probe captures — they embed real tab URLs,

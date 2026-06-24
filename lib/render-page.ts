@@ -69,7 +69,7 @@ function slugify(s: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return stripped.length > 0 ? stripped : "arc-spaces";
+  return stripped.length > 0 ? stripped : "sparca";
 }
 
 // Short base36 fingerprint (FNV-1a). Mixed into docId so two DIFFERENT documents
@@ -134,7 +134,7 @@ export function buildWirePayload(
   spaces: readonly SpaceConversion[],
   opts: RenderPageOptions,
 ): WirePayload {
-  const title = opts.title ?? "Arc Spaces";
+  const title = opts.title ?? "SpArca";
   const docId = `${slugify(title)}-${shortHash(spaces.map((s) => s.title).join("\n"))}`;
   return {
     v: 1,
@@ -190,9 +190,9 @@ export function renderPageDocument(
 <style>${STYLE}</style>
 </head>
 <body>
-<noscript class="noscript">This Arc Spaces page is interactive and needs JavaScript. Your data is embedded below; nothing is sent anywhere.</noscript>
-<aside class="sidebar" id="sidebar"></aside>
-<main class="content" id="content"></main>
+<noscript class="noscript">This SpArca page is interactive and needs JavaScript. Your data is embedded below; nothing is sent anywhere.</noscript>
+<aside class="sidebar" id="sidebar" aria-label="Spaces and search"></aside>
+<main class="content" id="content" aria-label="Bookmarks"></main>
 <script type="application/json" id="arc-data">${embedJson(payload)}</script>
 <script>${SCRIPT}</script>
 </body>
@@ -257,8 +257,12 @@ body{
 }
 .mini:hover{border-color:var(--muted)}
 .mini.on{background:var(--accent2); border-color:var(--accent2); color:#fff;}
-.legend{font-size:10.5px; color:var(--muted); line-height:1.6;}
-.legend kbd{font:inherit; background:var(--hover); border:1px solid var(--border); border-radius:4px; padding:0 4px;}
+.legend{font-size:10.5px; color:var(--muted); line-height:1.5;}
+.legend-h{text-transform:uppercase; letter-spacing:.06em; font-size:9px; opacity:.7; margin:2px 0 3px;}
+.legend-row{display:flex; align-items:baseline; gap:5px; margin:1.5px 0;}
+.legend-lbl{opacity:.85}
+.legend-sep{opacity:.45}
+.legend kbd{font:inherit; font-size:10px; background:var(--hover); border:1px solid var(--border); border-radius:4px; padding:0 4px; color:var(--muted);}
 
 .content{overflow-y:auto; padding:24px clamp(16px,4vw,48px); scroll-behavior:smooth;}
 .bar{
@@ -267,6 +271,7 @@ body{
   display:flex; align-items:center; gap:10px; font-size:12.5px;
 }
 .bar .grow{flex:1}
+.bar.warn{border-color:#e0a23a}
 .emptydoc{color:var(--muted)}
 .space{display:none; max-width:980px; margin:0 auto;}
 .space.active{display:block}
@@ -330,7 +335,7 @@ a.tile .fav{width:30px; height:30px; border-radius:8px; font-size:15px;}
 }
 a.tile .rm{top:6px; right:auto; left:8px;}
 details.folder>.rm{top:7px; right:8px;}
-a:hover .rm, details.folder:hover>.rm{opacity:1}
+a:hover .rm, a:focus-within .rm, details.folder:hover>.rm, details.folder:focus-within>.rm, .rm:focus{opacity:1}
 .rm:hover{background:#e0533a; color:#fff}
 
 details.folder{margin:2px 0; position:relative}
@@ -360,32 +365,67 @@ body.searching .space.empty{display:none}
 body.searching .group.empty{display:none}
 body.searching details.empty{display:none}
 body.searching .miss{display:none}
+
+@media (prefers-reduced-motion: reduce){
+  *{transition:none !important; scroll-behavior:auto !important}
+}
 `;
 
 const SCRIPT = `
 (function(){
   "use strict";
   var dataEl = document.getElementById('arc-data');
-  var DATA = JSON.parse(dataEl.textContent);
+  // Visible fallback so a corrupt file/working tree never leaves a blank page.
+  function fatal(msg){
+    var c = document.getElementById('content');
+    if(c){ c.textContent=''; var p = document.createElement('p'); p.className='emptydoc'; p.style.padding='24px'; p.textContent = msg; c.appendChild(p); }
+  }
+  var DATA;
+  try{
+    if(!dataEl) throw new Error('missing data block');
+    DATA = JSON.parse(dataEl.textContent);
+  }catch(e){
+    fatal('This file looks corrupted and could not be read. Re-export it from the generator.');
+    return;
+  }
   var NS = 'arc:' + DATA.docId;
   var KEY_TREE = NS + ':tree';
   var KEY_ACTIVE = NS + ':active';
 
   // ---- storage helpers (file:// localStorage works in Chromium/Vivaldi) ----
   function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
-  function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+  function lsSet(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ return false; } }
   function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){} }
   function clone(o){ return JSON.parse(JSON.stringify(o)); }
+  var storageFailed = false; // set when a persist() write is rejected (quota/disabled)
 
   // ---- working tree: the editable copy that shadows the embedded export ----
-  // A persisted/imported tree must be shape-valid or we ignore it. A single
-  // malformed Space (missing accent/pinned/unpinned) would otherwise throw
-  // mid-render, leaving a blank, un-recoverable-looking page on every reload.
+  // A persisted/imported tree is untrusted: validate Space shape, accent color
+  // tokens (they reach style sinks), and recurse EVERY node. A malformed leaf or
+  // folder (e.g. {t:'folder'} with no children) would otherwise throw mid-render
+  // and, because importJson/afterEdit persist first, brick the page on every
+  // reload. Depth-capped so a pathologically deep imported tree can't blow the
+  // stack here or in the render/count recursions downstream.
+  function validColor(c){ return typeof c==='string' && (/^#[0-9a-f]{3,8}$/i.test(c) || /^(?:hsl|rgb)a?\\([0-9 ,.%\\/]+\\)$/i.test(c)); }
+  function validNode(n, depth){
+    if(!n || depth>100) return false;
+    if(n.t==='leaf') return typeof n.url==='string' && typeof n.title==='string';
+    if(n.t==='folder'){
+      if(typeof n.title!=='string' || !Array.isArray(n.children)) return false;
+      for(var i=0;i<n.children.length;i++){ if(!validNode(n.children[i], depth+1)) return false; }
+      return true;
+    }
+    return false;
+  }
   function validTree(t){
     if(!t || !Array.isArray(t.spaces)) return false;
     for(var i=0;i<t.spaces.length;i++){
       var s = t.spaces[i];
-      if(!s || !Array.isArray(s.pinned) || !Array.isArray(s.unpinned) || !s.accent || s.accent.length<2) return false;
+      if(!s || typeof s.id!=='string' || !s.id) return false;
+      if(!Array.isArray(s.pinned) || !Array.isArray(s.unpinned)) return false;
+      if(!Array.isArray(s.accent) || s.accent.length<2 || !validColor(s.accent[0]) || !validColor(s.accent[1])) return false;
+      for(var p=0;p<s.pinned.length;p++){ if(!validNode(s.pinned[p], 0)) return false; }
+      for(var u=0;u<s.unpinned.length;u++){ if(!validNode(s.unpinned[u], 0)) return false; }
     }
     return true;
   }
@@ -395,7 +435,7 @@ const SCRIPT = `
     if(raw){ try{ var t = JSON.parse(raw); if(validTree(t)) return t; }catch(e){} }
     return clone(DATA);
   }
-  function persist(){ lsSet(KEY_TREE, JSON.stringify(working)); }
+  function persist(){ if(!lsSet(KEY_TREE, JSON.stringify(working))) storageFailed = true; }
   function edited(){ return !!lsGet(KEY_TREE); }
 
   // ---- url safety: mirrors server safeHref() ----
@@ -411,13 +451,21 @@ const SCRIPT = `
   }
   function hostOf(url){ try{ return new URL(url).hostname.replace(/^www\\./,''); }catch(e){ return ''; } }
   function titleFromUrl(url){ return hostOf(url) || url; }
+  // First non-empty, non-'#'-comment line. Mirrors the uri-list convention so a
+  // multi-line drop/paste coerces ONE line rather than the whole blob into a
+  // single garbage URL. Shared by the drop, paste, and add-row entry points.
+  function firstUrlLine(s){
+    var lines = String(s||'').split(/\\r?\\n/);
+    for(var i=0;i<lines.length;i++){ var ln=lines[i].trim(); if(ln && ln.charAt(0)!=='#') return ln; }
+    return '';
+  }
 
   // ---- icon tiles (offline; no favicon services) ----
   function monogram(s){ var m = (s||'').trim().match(/[\\p{L}\\p{N}]/u); return m ? m[0].toUpperCase() : '\\u2022'; }
   function hashHue(s){ var h=0; for(var i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))>>>0; return h%360; }
 
   function el(tag, cls, txt){ var e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; return e; }
-  function favTile(seed, label, big){
+  function favTile(seed, label){
     var s = el('span', 'fav', monogram(label));
     s.style.setProperty('--h', hashHue(seed || label));
     return s;
@@ -470,9 +518,7 @@ const SCRIPT = `
   function dtURL(dt){
     var u=''; try{ u = dt.getData('text/uri-list') || ''; }catch(e){}
     if(!u){ try{ u = dt.getData('text/plain') || ''; }catch(e){} }
-    var lines = u.split(/\\r?\\n/);
-    for(var i=0;i<lines.length;i++){ var ln=lines[i].trim(); if(ln && ln.charAt(0)!=='#'){ u=ln; break; } }
-    return coerceUrl(u);
+    return coerceUrl(firstUrlLine(u));
   }
   function dtHasItem(dt){ var t=dt.types; if(!t) return false; for(var i=0;i<t.length;i++){ var v=t[i]; if(v==='application/x-arc'||v==='text/uri-list'||v==='text/plain') return true; } return false; }
 
@@ -510,7 +556,6 @@ const SCRIPT = `
     });
   }
   function makeContainerDrop(elm, arr){
-    elm._arr = arr;
     elm.addEventListener('dragover', function(ev){
       if(!drag && !dtHasItem(ev.dataTransfer)) return;
       ev.preventDefault();
@@ -529,7 +574,7 @@ const SCRIPT = `
   }
 
   function removeBtn(arr, node){
-    var b = el('button','rm','\\u00d7'); b.type='button'; b.title='Remove';
+    var b = el('button','rm','\\u00d7'); b.type='button'; b.title='Remove'; b.setAttribute('aria-label','Remove');
     b.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); var i=indexOf(arr,node); if(i>-1){ arr.splice(i,1); afterEdit(); } });
     b.addEventListener('dragstart', function(ev){ ev.preventDefault(); ev.stopPropagation(); });
     return b;
@@ -585,7 +630,15 @@ const SCRIPT = `
       makeContainerDrop(grid, nodes);
       container.appendChild(grid);
     }
-    if(folders.length){ var wrap=el('div'); renderInto(wrap, folders); container.appendChild(wrap); makeContainerDrop(wrap, nodes); }
+    if(folders.length){
+      // Render pinned folders against the REAL backing array (nodes), not the
+      // throwaway 'folders' split: otherwise removeBtn/makeDraggable would close
+      // over the temp array, so removing a pinned folder is a no-op and dragging
+      // one duplicates it (it leaves the temp array but never sp.pinned).
+      var wrap=el('div');
+      for(i=0;i<nodes.length;i++){ if(nodes[i].t!=='leaf') wrap.appendChild(makeFolder(nodes[i], nodes)); }
+      container.appendChild(wrap); makeContainerDrop(wrap, nodes);
+    }
   }
 
   function renameNode(node){
@@ -597,7 +650,7 @@ const SCRIPT = `
   // ---- content build ----
   var content = document.getElementById('content');
   var sidebar = document.getElementById('sidebar');
-  var q, count, nav, allBtn, staleBar;
+  var q, count, nav, allBtn;
   var activeId = lsGet(KEY_ACTIVE);
   var fullView = false;
 
@@ -605,6 +658,7 @@ const SCRIPT = `
 
   function renderContent(){
     content.textContent='';
+    if(storageFailed) content.appendChild(buildStorageWarn());
     if(staleNeeded()) content.appendChild(buildStaleBar());
     if(!working.spaces.length){ content.appendChild(el('p','emptydoc','No Spaces with bookmarks were found.')); return; }
     for(var s=0;s<working.spaces.length;s++){
@@ -635,7 +689,7 @@ const SCRIPT = `
   function buildAddRow(sp){
     var row = el('div','addrow');
     var inp = el('input','add-url'); inp.type='text'; inp.name='add-url'; inp.placeholder='Paste a URL, press Enter to add\\u2026'; inp.autocomplete='off'; inp.spellcheck=false; inp.setAttribute('aria-label','Add a link by URL');
-    function add(){ var u = coerceUrl(inp.value); if(!u){ inp.classList.add('bad'); return; } sp.unpinned.unshift({t:'leaf', title:titleFromUrl(u), url:u}); inp.value=''; afterEdit(); }
+    function add(){ var u = coerceUrl(firstUrlLine(inp.value)); if(!u){ inp.classList.add('bad'); return; } sp.unpinned.unshift({t:'leaf', title:titleFromUrl(u), url:u}); inp.value=''; afterEdit({focusAdd:true}); }
     inp.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); add(); } });
     inp.addEventListener('input', function(){ inp.classList.remove('bad'); });
     var b = el('button','mini','Add'); b.type='button'; b.addEventListener('click', add);
@@ -644,7 +698,22 @@ const SCRIPT = `
   }
 
   // ---- staleness banner: embedded export differs from edited working copy ----
-  function staleNeeded(){ return edited() && working.generatedAt !== DATA.generatedAt; }
+  // Only nag when the embedded export is genuinely NEWER than the edited copy.
+  // Plain string-inequality also fires when you re-open an OLDER file after
+  // editing, and the banner's 'newer' wording would then be wrong-direction.
+  function staleNeeded(){
+    if(!edited()) return false;
+    var w = working.generatedAt, d = DATA.generatedAt;
+    if(w === d) return false;
+    var wt = Date.parse(w), dt = Date.parse(d);
+    if(!isNaN(wt) && !isNaN(dt)) return dt > wt;
+    return w !== d;
+  }
+  function buildStorageWarn(){
+    var bar = el('div','bar warn');
+    bar.appendChild(el('span','grow','Your edits are not being saved \\u2014 browser storage is full or disabled. Use Export to keep a copy.'));
+    return bar;
+  }
   function buildStaleBar(){
     var bar = el('div','bar');
     bar.appendChild(el('span','grow','A newer Arc export is embedded in this file. Your edited copy is from ' + (working.generatedAt||'an earlier export') + '.'));
@@ -674,10 +743,20 @@ const SCRIPT = `
     var reset = el('button','mini','Reset'); reset.addEventListener('click', resetAll); actions.appendChild(reset);
     foot.appendChild(actions);
     var legend = el('div','legend');
-    legend.appendChild(document.createTextNode('Keys: '));
-    legend.appendChild(kbd('1\\u20139')); legend.appendChild(document.createTextNode(' open pinned \\u00b7 '));
-    legend.appendChild(kbd('\\u26250\\u20139')); legend.appendChild(document.createTextNode(' switch space \\u00b7 '));
-    legend.appendChild(kbd('/')); legend.appendChild(document.createTextNode(' search'));
+    legend.appendChild(el('div','legend-h','Shortcuts'));
+    var cheats = [
+      [['/'], 'Search'],
+      [['1\\u20139'], 'Open pinned'],
+      [['\\u23251\\u20139'], 'Switch Space'],
+      [['\\u23250'], 'Show all Spaces'],
+      [['Paste','Drop'], 'Add a link']
+    ];
+    for(var ci=0; ci<cheats.length; ci++){
+      var lr = el('div','legend-row'), keys = cheats[ci][0];
+      for(var ki=0; ki<keys.length; ki++){ if(ki) lr.appendChild(el('span','legend-sep','/')); lr.appendChild(kbd(keys[ki])); }
+      lr.appendChild(el('span','legend-lbl', cheats[ci][1]));
+      legend.appendChild(lr);
+    }
     foot.appendChild(legend);
     sidebar.appendChild(foot);
 
@@ -692,7 +771,7 @@ const SCRIPT = `
       (function(sp, idx){
         var b = el('button','space-link'); b.type='button'; b.setAttribute('data-space', sp.id);
         b.style.setProperty('--a1', sp.accent[0]); b.style.setProperty('--a2', sp.accent[1]);
-        b.appendChild(el('span','key', idx<9 ? ('\\u2625'+(idx+1)) : ''));
+        b.appendChild(el('span','key', idx<9 ? ('\\u2325'+(idx+1)) : ''));
         b.appendChild(el('span','badge', sp.emoji));
         b.appendChild(el('span','nm', sp.title));
         b.appendChild(el('span','ct', String(spaceCount(sp))));
@@ -707,7 +786,7 @@ const SCRIPT = `
     var spaces = content.querySelectorAll('.space');
     var found=false, i;
     for(i=0;i<spaces.length;i++){ var on = spaces[i].id===activeId; spaces[i].classList.toggle('active', on); if(on) found=true; }
-    if(!found && spaces.length){ activeId = spaces[0].id; spaces[0].classList.add('active'); }
+    if(!found && spaces.length){ activeId = spaces[0].id; lsSet(KEY_ACTIVE, activeId); spaces[0].classList.add('active'); }
     var navs = nav.querySelectorAll('.space-link');
     for(i=0;i<navs.length;i++) navs[i].classList.toggle('active', navs[i].getAttribute('data-space')===activeId);
   }
@@ -757,11 +836,20 @@ const SCRIPT = `
     var a = el('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(url); }, 0);
   }
-  function exportJson(){ download((DATA.docId||'arc-spaces') + '-export.json', JSON.stringify(working, null, 2)); }
+  function exportJson(){ download((DATA.docId||'sparca') + '-export.json', JSON.stringify(working, null, 2)); }
   function importJson(ev){
     var f = ev.target.files && ev.target.files[0]; if(!f) return;
     var r = new FileReader();
-    r.onload = function(){ try{ var t = JSON.parse(String(r.result)); if(validTree(t)){ if(!t.generatedAt) t.generatedAt = DATA.generatedAt; working = t; persist(); rerender(); } else { window.alert('Not a valid Arc Spaces export.'); } }catch(e){ window.alert('Could not parse that file.'); } };
+    r.onload = function(){
+      try{
+        var t = JSON.parse(String(r.result));
+        if(t && t.v !== undefined && t.v !== 1){ window.alert('That export is from an unsupported version.'); return; }
+        if(!validTree(t)){ window.alert('Not a valid SpArca export.'); return; }
+        if(t.docId && DATA.docId && t.docId !== DATA.docId && !window.confirm('That file was exported from a different document. Import it over this one anyway?')) return;
+        if(!t.generatedAt) t.generatedAt = DATA.generatedAt;
+        working = t; persist(); rerender();
+      }catch(e){ window.alert('Could not parse that file.'); }
+    };
     r.readAsText(f); ev.target.value='';
   }
   function resetAll(){
@@ -770,10 +858,13 @@ const SCRIPT = `
   }
 
   function clearSearch(){ if(document.body.classList.contains('searching')){ q.value=''; exitSearch(); count.textContent=''; } }
-  function afterEdit(){
+  function afterEdit(opts){
     if(!working.generatedAt) working.generatedAt = DATA.generatedAt;
     persist(); clearDI();
     rerender();
+    // A full rerender rebuilds the add-row <input>; after adding a link, restore
+    // focus to the rebuilt field in the active Space so rapid adds keep typing.
+    if(opts && opts.focusAdd){ var a = content.querySelector('.space.active .add-url'); if(a) a.focus(); }
   }
   // Every full rebuild drops search state first: the freshly built DOM carries
   // no .miss/.empty marks, so leaving body.searching set would show a broken,
@@ -796,9 +887,10 @@ const SCRIPT = `
       return;
     }
     if(n===0) return;
+    if(document.body.classList.contains('searching')) return; // dial badges index the unfiltered grid; don't open by number while a search filters it
     e.preventDefault();
     var sec = document.getElementById(activeId); if(!sec) return;
-    var tiles = sec.querySelectorAll('.grid a.tile');
+    var tiles = sec.querySelectorAll('.grid a.tile:not(.miss)');
     var tile = tiles[n-1]; if(tile && tile.href) tile.click();
   });
 
@@ -806,7 +898,7 @@ const SCRIPT = `
   document.addEventListener('paste', function(e){
     var t = e.target; if(t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable)) return;
     var txt = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
-    var u = coerceUrl(txt); if(!u) return;
+    var u = coerceUrl(firstUrlLine(txt)); if(!u) return;
     var sp = activeSpace(); if(!sp) return;
     e.preventDefault();
     sp.unpinned.unshift({t:'leaf', title:titleFromUrl(u), url:u}); afterEdit();
@@ -816,7 +908,14 @@ const SCRIPT = `
   document.addEventListener('drop', function(e){ if(drag || dtHasItem(e.dataTransfer)) e.preventDefault(); clearDI(); });
 
   // ---- boot ----
-  buildShell();
-  rerender();
+  function boot(){ buildShell(); rerender(); q.focus(); }
+  try{ boot(); }
+  catch(e){
+    // A corrupt working tree slipped past validation: discard it, fall back to
+    // the embedded export, and retry once. If even that fails, show a message
+    // rather than leave a blank page.
+    try{ lsDel(KEY_TREE); working = clone(DATA); boot(); }
+    catch(e2){ fatal('Your saved edits could not be loaded and have been set aside. Reload to start from the embedded export.'); }
+  }
 })();
 `;

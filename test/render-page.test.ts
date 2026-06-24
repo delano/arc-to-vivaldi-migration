@@ -87,10 +87,10 @@ test("renderPageDocument: embeds the spaces as a parseable JSON payload", () => 
     spaces: ReadonlyArray<{ title: string; emoji: string; accent: string[] }>;
   };
   strictEqual(payload.v, 1);
-  strictEqual(payload.title, "Arc Spaces");
+  strictEqual(payload.title, "SpArca");
   // docId = title slug + a content fingerprint, so distinct same-titled docs
   // don't collide in the shared file:// localStorage origin.
-  ok(/^arc-spaces-[0-9a-z]+$/.test(payload.docId), "docId is slug + hash");
+  ok(/^sparca-[0-9a-z]+$/.test(payload.docId), "docId is slug + hash");
   deepStrictEqual(
     payload.spaces.map((s) => s.title),
     ["Work", "Personal"],
@@ -200,4 +200,21 @@ test("renderPageDocument: ships interaction the page needs (search, keys, editin
   ok(html.includes("Paste a URL"), "add-link affordance");
   ok(html.includes("application/x-arc"), "internal drag payload type");
   ok(html.includes("localStorage"), "persists working state");
+});
+
+// Regression guards for the hardening pass. The client app is a string embedded
+// in the document (no DOM in this test runner), so these assert the fixes are
+// present by shape; the interactive behaviours are covered by browser checks.
+test("renderPageDocument: ships the hardened client (validation, recovery, shared URL parsing)", () => {
+  const html = renderPageDocument(sample, opts);
+  ok(html.includes("validNode") && html.includes("validColor"),
+    "recursive node + accent-token validation of the persisted/imported tree");
+  ok(html.includes("firstUrlLine"),
+    "shared multi-line URL parsing across drop/paste/add");
+  ok(!html.includes("renderInto(wrap, folders)"),
+    "pinned folders render against the real backing array, not a throwaway split");
+  ok(html.includes("function fatal"),
+    "boot has a visible fallback instead of a blank page on corruption");
+  ok(html.includes("Shortcuts"), "sidebar ships the shortcuts cheatsheet");
+  ok(!html.includes("\\u2625"), "option-key hint is U+2325 (⌥), not the U+2625 ankh");
 });

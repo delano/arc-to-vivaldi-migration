@@ -4,8 +4,8 @@
  *
  * Modes (mutually exclusive except --split):
  *   (default)           Netscape bookmarks HTML       -> ./arc-bookmarks.html
- *   --page              standalone offline Arc-style links page -> ./arc-spaces.html
- *   --json              just the page's embedded data payload   -> ./arc-spaces.json
+ *   --page              standalone offline Arc-style links page -> ./sparca.html
+ *   --json              just the page's embedded data payload   -> ./sparca.json
  *   --split             one file per Space (pairs with default, --page or --json)
  *   --inject[-dry-run]  paste-able Vivaldi Workspaces importer (DevTools)
  *   --unwind[-dry-run]  close tabs a prior --inject created
@@ -513,7 +513,7 @@ async function main(): Promise<number> {
         jsonPaths.push(filePath);
       }
     } else {
-      const outPath = args.output ?? "./arc-spaces.json";
+      const outPath = args.output ?? "./sparca.json";
       const payload = buildWirePayload(conversions, { generatedAt });
       await writeFile(outPath, JSON.stringify(payload, null, 2), "utf8");
       jsonPaths.push(outPath);
@@ -548,7 +548,7 @@ async function main(): Promise<number> {
         }
       }
     } else {
-      const outPath = args.output ?? "./arc-spaces.html";
+      const outPath = args.output ?? "./sparca.html";
       await writeFile(outPath, renderPageDocument(conversions, { generatedAt }), "utf8");
       pagePaths.push(outPath);
     }

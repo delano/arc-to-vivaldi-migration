@@ -48,7 +48,7 @@ npx tsx arc-to-vivaldi.ts --input ./StorableSidebar.json --output ./bookmarks.ht
 # One HTML file per Space, written into ./out/
 npx tsx arc-to-vivaldi.ts --split --output ./out
 
-# A standalone, offline Arc-style links page → ./arc-spaces.html
+# A standalone, offline Arc-style links page → ./sparca.html
 npx tsx arc-to-vivaldi.ts --page --input ./StorableSidebar.json
 
 # Verbose — per-Space counts
@@ -84,7 +84,7 @@ HTML file that lays your links out the way Arc did — a fast, pretty facsimile
 you can bookmark as a start page or keep in a tab.
 
 ```bash
-# One page with all Spaces → ./arc-spaces.html
+# One page with all Spaces → ./sparca.html
 npx tsx arc-to-vivaldi.ts --page --input ./StorableSidebar.json
 
 # One page per Space → ./out/arc-<slug>.html
@@ -104,7 +104,7 @@ requests when opened — no favicon services, web fonts, CDNs, or trackers. Site
 icons are drawn locally as colored monogram tiles, so nothing about your links
 leaves your machine just by viewing the page. Links carry `rel="noreferrer"`.
 Because the file embeds your real URLs and titles, it's covered by
-`.gitignore` (`arc-*.html`) — don't commit it.
+`.gitignore` (`arc-*.html`, `arc-*.json`, `sparca.html`, `sparca.json`) — don't commit it.
 
 ## Experimental: recreate Arc Spaces as Vivaldi Workspaces
 
