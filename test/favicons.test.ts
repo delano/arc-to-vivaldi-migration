@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import { strictEqual, deepStrictEqual, ok } from "node:assert";
 import { hostOf, collectHosts, fetchFavicons } from "../lib/favicons.js";
-import type { FetchLike } from "../lib/favicons.js";
+import type { FetchLike, FaviconProgress } from "../lib/favicons.js";
 import type { BookmarkNode, SpaceConversion } from "../lib/types.js";
 
 const leaf = (title: string, url: string): BookmarkNode => ({ kind: "leaf", title, url });
@@ -110,4 +110,64 @@ test("fetchFavicons: resolves a batch and skips empties", async () => {
     concurrency: 2,
   });
   deepStrictEqual([...icons.keys()].sort(), ["ddgonly.test", "example.com"]);
+});
+
+// ---- progress + miss tally (the driver's status line / summary inputs) ----
+
+// The empty host is filtered before the queue, so a 4-element input yields a
+// 3-element queue; only unknown.test misses (globe placeholder).
+const BATCH = ["example.com", "", "ddgonly.test", "unknown.test"];
+
+test("fetchFavicons: onProgress fires once per attempted host, done monotonic 1..N", async () => {
+  const events: FaviconProgress[] = [];
+  await fetchFavicons(BATCH, {
+    fetchImpl: mockFetch,
+    concurrency: 1, // deterministic ordering for the monotonicity assertion
+    onProgress: (p) => events.push(p),
+  });
+  strictEqual(events.length, 3, "3 non-empty hosts -> 3 events (empty filtered)");
+  deepStrictEqual(events.map((e) => e.done), [1, 2, 3]);
+  ok(events.every((e) => e.total === 3), "total stays the queue length throughout");
+});
+
+test("fetchFavicons: onProgress ok tracks resolution and hit flags per host", async () => {
+  const events: FaviconProgress[] = [];
+  const icons = await fetchFavicons(BATCH, {
+    fetchImpl: mockFetch,
+    concurrency: 1,
+    onProgress: (p) => events.push(p),
+  });
+  // Last event's running `ok` equals the final embedded count.
+  strictEqual(events.at(-1)!.ok, icons.size);
+  const byHost = new Map(events.map((e) => [e.host, e]));
+  strictEqual(byHost.get("example.com")!.hit, true);
+  strictEqual(byHost.get("ddgonly.test")!.hit, true);
+  strictEqual(byHost.get("unknown.test")!.hit, false); // globe miss
+});
+
+test("fetchFavicons: miss tally is derivable as total - ok (== driver's 'not retrieved')", async () => {
+  const events: FaviconProgress[] = [];
+  const icons = await fetchFavicons(BATCH, {
+    fetchImpl: mockFetch,
+    concurrency: 2,
+    onProgress: (p) => events.push(p),
+  });
+  const last = events.at(-1)!;
+  strictEqual(last.total - last.ok, 1, "only unknown.test misses");
+  strictEqual(last.total - icons.size, 1, "driver derives the same miss count from the map");
+});
+
+test("fetchFavicons: empty hosts never produce a progress event", async () => {
+  const events: FaviconProgress[] = [];
+  await fetchFavicons(["", "", ""], {
+    fetchImpl: mockFetch,
+    onProgress: (p) => events.push(p),
+  });
+  strictEqual(events.length, 0, "all-empty input -> no events, no inflated total");
+});
+
+test("fetchFavicons: onProgress is optional (no-op default does not throw)", async () => {
+  // Every pre-existing test omits onProgress; assert that path explicitly.
+  const icons = await fetchFavicons(["example.com"], { fetchImpl: mockFetch });
+  ok(icons.has("example.com"));
 });

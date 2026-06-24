@@ -31,6 +31,18 @@ export interface FetchFaviconsOptions {
   readonly maxBytes?: number;
   readonly fetchImpl?: FetchLike;
   readonly log?: (msg: string) => void;
+  // Per-host progress, fired once after EACH attempted host (post dedupe/empty
+  // filter). The library does no throttling — the driver decides how (and
+  // whether) to render. `log` stays reserved for one-time notices.
+  readonly onProgress?: (p: FaviconProgress) => void;
+}
+
+export interface FaviconProgress {
+  readonly done: number; // hosts attempted so far (1..total)
+  readonly total: number; // queue length, post dedupe/empty-filter
+  readonly ok: number; // resolved so far (== out.size)
+  readonly host: string; // host just finished
+  readonly hit: boolean; // did this host resolve?
 }
 
 // Image MIME types we are willing to embed. SVG is allowed: when used as an
@@ -96,6 +108,7 @@ export async function fetchFavicons(
   const maxBytes = opts.maxBytes ?? 24 * 1024;
   const doFetch = opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined);
   const log = opts.log ?? ((): void => {});
+  const onProgress = opts.onProgress ?? ((): void => {});
   const out = new Map<string, string>();
 
   const queue = [...new Set(hosts.filter((h) => h.length > 0))];
@@ -117,8 +130,9 @@ export async function fetchFavicons(
       const host = queue[next++]!;
       const uri = await resolveOne(host, doFetch, size, timeoutMs, maxBytes, globe);
       done++;
+      const hit = uri !== null;
       if (uri) out.set(host, uri);
-      if (done % 20 === 0) log(`favicons: ${done}/${queue.length}…`);
+      onProgress({ done, total: queue.length, ok: out.size, host, hit });
     }
   };
   await Promise.all(

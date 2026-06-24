@@ -534,11 +534,34 @@ async function main(): Promise<number> {
   let icons: ReadonlyMap<string, string> | undefined;
   if (args.favicons && (args.mode === "page" || args.mode === "json")) {
     const hosts = collectHosts(conversions);
-    process.stderr.write(`fetching favicons for ${hosts.length} hosts…\n`);
+    const tty = process.stderr.isTTY === true;
+    const total = hosts.length;
+    process.stderr.write(`fetching favicons for ${total} hosts…\n`);
     icons = await fetchFavicons(hosts, {
       log: args.verbose ? (m) => process.stderr.write(`  ${m}\n`) : undefined,
+      onProgress: tty
+        ? // TTY: overwrite a single status line (leading \r, no newline) and
+          // repaint sparingly so huge host lists don't flood the terminal.
+          (p) => {
+            if (p.done % 5 === 0 || p.done === p.total) {
+              process.stderr.write(`\rfavicons ${p.done}/${p.total} (${p.ok} embedded)`);
+            }
+          }
+        : // Non-TTY (pipe/CI): never \r-spam. A sparse heartbeat keeps long
+          // runs alive in CI logs; the bracketing lines carry the totals.
+          (p) => {
+            if (p.done % 50 === 0 && p.done !== p.total) {
+              process.stderr.write(`favicons ${p.done}/${p.total}\n`);
+            }
+          },
     });
-    process.stderr.write(`embedded ${icons.size}/${hosts.length} favicons\n`);
+    const failed = total - icons.size;
+    if (tty) process.stderr.write("\r\x1b[K"); // erase the in-progress line
+    process.stderr.write(
+      `embedded ${icons.size}/${total} favicons` +
+        (failed > 0 ? ` — not retrieved: ${failed}` : "") +
+        "\n",
+    );
   }
 
   if (args.mode === "inject" || args.mode === "inject-dry-run") {
