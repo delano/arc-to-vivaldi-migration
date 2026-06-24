@@ -13,6 +13,20 @@ test("parseArgs: defaults", () => {
   });
 });
 
+test("parseArgs: --page sets mode to page", () => {
+  strictEqual(parseArgs(["--page"]).mode, "page");
+});
+
+test("parseArgs: --page + --split is allowed (one page per Space)", () => {
+  const args = parseArgs(["--page", "--split"]);
+  strictEqual(args.mode, "page");
+  strictEqual(args.split, true);
+});
+
+test("parseArgs: --page + --inject is a conflict", () => {
+  throws(() => parseArgs(["--page", "--inject"]), /mutually exclusive/);
+});
+
 test("parseArgs: --probe sets mode to probe", () => {
   strictEqual(parseArgs(["--probe"]).mode, "probe");
 });

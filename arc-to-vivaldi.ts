@@ -25,6 +25,8 @@ import { buildInjectablePayload } from "./lib/payload.js";
 import { renderProbeScript } from "./lib/render-probe.js";
 import { renderInjectScript } from "./lib/render-inject.js";
 import { renderUnwindScript } from "./lib/render-unwind.js";
+import { renderPageDocument } from "./lib/render-page.js";
+import { extractAccentStops } from "./lib/arc-color.js";
 
 // ---------- Helpers ----------
 
@@ -188,12 +190,18 @@ function narrowSpace(v: unknown, id: string): ArcSpace | undefined {
   if (isRecord(customInfoRaw)) {
     const iconTypeRaw = customInfoRaw["iconType"];
     if (isRecord(iconTypeRaw)) {
-      customInfo = { iconType: { icon: asString(iconTypeRaw["icon"]) } };
+      customInfo = {
+        iconType: {
+          icon: asString(iconTypeRaw["icon"]),
+          emoji: asString(iconTypeRaw["emoji_v2"]),
+        },
+      };
     } else {
       customInfo = { iconType: undefined };
     }
   }
-  return { id, title, customInfo, newContainerIDs };
+  const accent = extractAccentStops(customInfoRaw);
+  return { id, title, customInfo, newContainerIDs, accent };
 }
 
 function narrowItem(v: unknown, id: string): ArcItem | undefined {
@@ -362,11 +370,12 @@ async function main(): Promise<number> {
   if (args.help) {
     process.stdout.write(
       "usage: tsx arc-to-vivaldi.ts [--input <path>] [--output <path>]\n" +
-        "                            [--split | --probe | --inject | --inject-dry-run]\n" +
+        "                            [--page] [--split | --probe | --inject | --inject-dry-run]\n" +
         "                            [-v]\n" +
-        "  HTML modes (default): --split is allowed.\n" +
+        "  HTML modes (default): bookmark HTML. --page emits a standalone, offline\n" +
+        "    Arc-style links page instead. --split (one file per Space) works with both.\n" +
         "  JS payload modes: --probe, --inject, --inject-dry-run are mutually exclusive\n" +
-        "    and cannot be combined with --split.\n",
+        "    and cannot be combined with --split or --page.\n",
     );
     return 0;
   }
@@ -425,6 +434,8 @@ async function main(): Promise<number> {
     conversions.push({
       title,
       iconHint: space.customInfo?.iconType?.icon,
+      emoji: space.customInfo?.iconType?.emoji,
+      accent: space.accent,
       pinned,
       unpinned,
       bookmarkCount: stats.bookmarks,
@@ -470,6 +481,40 @@ async function main(): Promise<number> {
       `unwind script (matches ${payload.spaces.length} space names) written to ${outPath}` +
         (args.mode === "unwind-dry-run" ? " (dry-run mode)" : "") +
         "\n",
+    );
+    return 0;
+  }
+
+  if (args.mode === "page") {
+    const generatedAt = new Date().toISOString();
+    const pagePaths: string[] = [];
+    if (args.split) {
+      const outDir = args.output ?? ".";
+      await mkdir(outDir, { recursive: true });
+      const taken = new Set<string>();
+      for (const c of conversions) {
+        const slug = uniqueSlug(slugify(c.title), taken);
+        const filePath = join(outDir, `arc-${slug}.html`);
+        await writeFile(
+          filePath,
+          renderPageDocument([c], { generatedAt, title: c.title }),
+          "utf8",
+        );
+        pagePaths.push(filePath);
+        if (args.verbose) {
+          process.stderr.write(`  ${c.title}: ${c.bookmarkCount} links → ${filePath}\n`);
+        }
+      }
+    } else {
+      const outPath = args.output ?? "./arc-spaces.html";
+      await writeFile(outPath, renderPageDocument(conversions, { generatedAt }), "utf8");
+      pagePaths.push(outPath);
+    }
+    const destination = args.split
+      ? `${pagePaths.length} files in ${args.output ?? "."}`
+      : (pagePaths[0] ?? "(no output)");
+    process.stderr.write(
+      `${conversions.length} spaces, ${totalBookmarks} links → ${destination}\n`,
     );
     return 0;
   }

@@ -48,6 +48,9 @@ npx tsx arc-to-vivaldi.ts --input ./StorableSidebar.json --output ./bookmarks.ht
 # One HTML file per Space, written into ./out/
 npx tsx arc-to-vivaldi.ts --split --output ./out
 
+# A standalone, offline Arc-style links page → ./arc-spaces.html
+npx tsx arc-to-vivaldi.ts --page --input ./StorableSidebar.json
+
 # Verbose — per-Space counts
 npx tsx arc-to-vivaldi.ts -v
 ```
@@ -58,7 +61,8 @@ Flags:
 | ----------------- | ------------------------------------------------------------------------ |
 | `--input <path>`  | Path to `StorableSidebar.json`. Defaults to Windows auto-discovery.       |
 | `--output <path>` | Output file (combined mode) or directory (with `--split`).                |
-| `--split`         | One file per Space, named `arc-<slug>.html`.                              |
+| `--split`         | One file per Space, named `arc-<slug>.html`. Works with `--page` too.      |
+| `--page`          | Emit a standalone, offline Arc-style links page instead of bookmark HTML. |
 | `-v`, `--verbose` | Print a per-Space breakdown.                                              |
 | `-h`, `--help`    | Print usage.                                                              |
 | `--probe`              | Emit `probe-vivaldi.js` for Vivaldi private-API discovery. See "Experimental" section below. |
@@ -70,6 +74,37 @@ Flags:
 `Vivaldi menu → File → Import Bookmarks and Settings…` → choose **Bookmarks
 HTML File** and point it at the generated file. Each Space becomes a top-level
 folder containing `Pinned` and `Unpinned` subfolders, mirroring Arc's layout.
+
+## Standalone Arc-style page (`--page`)
+
+Arc's Spaces, pinned tabs, and folders don't map cleanly onto another browser's
+model. If replicating them inside Vivaldi feels like more trouble than it's
+worth, `--page` skips the browser entirely and emits a single, self-contained
+HTML file that lays your links out the way Arc did — a fast, pretty facsimile
+you can bookmark as a start page or keep in a tab.
+
+```bash
+# One page with all Spaces → ./arc-spaces.html
+npx tsx arc-to-vivaldi.ts --page --input ./StorableSidebar.json
+
+# One page per Space → ./out/arc-<slug>.html
+npx tsx arc-to-vivaldi.ts --page --split --output ./out
+```
+
+What you get:
+
+- A left sidebar of Spaces (with their original emoji and accent color), a
+  per-Space gradient banner, a pinned-tile grid, and collapsible folders —
+  links kept in the exact order Arc showed them.
+- A search box that filters links across every Space at once.
+- Light and dark themes (follows your OS setting).
+
+**Offline and private by construction.** The page makes **zero** third-party
+requests when opened — no favicon services, web fonts, CDNs, or trackers. Site
+icons are drawn locally as colored monogram tiles, so nothing about your links
+leaves your machine just by viewing the page. Links carry `rel="noreferrer"`.
+Because the file embeds your real URLs and titles, it's covered by
+`.gitignore` (`arc-*.html`) — don't commit it.
 
 ## Experimental: recreate Arc Spaces as Vivaldi Workspaces
 

@@ -1,5 +1,6 @@
 export type CliMode =
   | "html"
+  | "page"
   | "probe"
   | "inject"
   | "inject-dry-run"
@@ -26,7 +27,7 @@ export function parseArgs(argv: readonly string[]): CliArgs {
   const setMode = (next: CliMode): void => {
     if (mode !== "html") {
       throw new Error(
-        `--probe, --inject, --inject-dry-run, --unwind and --unwind-dry-run are mutually exclusive`,
+        `--page, --probe, --inject, --inject-dry-run, --unwind and --unwind-dry-run are mutually exclusive`,
       );
     }
     mode = next;
@@ -46,6 +47,8 @@ export function parseArgs(argv: readonly string[]): CliArgs {
       i++;
     } else if (arg === "--split") {
       split = true;
+    } else if (arg === "--page") {
+      setMode("page");
     } else if (arg === "--probe") {
       setMode("probe");
     } else if (arg === "--inject") {
@@ -66,8 +69,10 @@ export function parseArgs(argv: readonly string[]): CliArgs {
     }
   }
 
-  if (split && mode !== "html") {
-    throw new Error("--split only applies to HTML output, not JS payload modes");
+  if (split && mode !== "html" && mode !== "page") {
+    throw new Error(
+      "--split only applies to HTML/page output, not JS payload modes",
+    );
   }
 
   return { input, output, verbose, split, mode, help };
