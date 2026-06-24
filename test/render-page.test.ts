@@ -123,6 +123,37 @@ test("renderPageDocument: escapes HTML metacharacters in titles", () => {
   strictEqual(html.match(/<script>/g)?.length, 1);
 });
 
+test("renderPageDocument: neutralizes javascript:/data: bookmark URLs (XSS)", () => {
+  const evil: readonly SpaceConversion[] = [
+    {
+      title: "Bookmarklets",
+      iconHint: undefined,
+      accent: [],
+      pinned: [],
+      unpinned: [
+        leaf("Run JS", "javascript:alert(document.domain)"),
+        leaf("JS upper", "JavaScript:alert(1)"),
+        leaf("Data", "data:text/html,<script>alert(1)</script>"),
+        leaf("Safe", "https://safe.example/"),
+        leaf("View source", "view-source:https://safe.example/"),
+      ],
+      bookmarkCount: 5,
+      folderCount: 0,
+    },
+  ];
+  const html = renderPageDocument(evil, opts);
+  // No executable scheme is ever emitted as a live href (case-insensitive).
+  ok(!/href="javascript:/i.test(html), "must not emit a javascript: href");
+  ok(!/href="data:/i.test(html), "must not emit a data: href");
+  // The data: payload must not leak as raw markup.
+  ok(!html.includes("<script>alert(1)</script>"), "data: payload stays escaped");
+  // Blocked entries are still rendered (as non-clickable .unsafe items).
+  ok(html.includes("unsafe"), "blocked URLs still render, just not as links");
+  // Genuine navigation links are untouched.
+  ok(html.includes('href="https://safe.example/"'), "safe http(s) URL still linked");
+  ok(html.includes('href="view-source:https://safe.example/"'), "view-source: preserved");
+});
+
 test("renderPageDocument: handles an empty space list", () => {
   const html = renderPageDocument([], opts);
   ok(html.startsWith("<!DOCTYPE html>"));

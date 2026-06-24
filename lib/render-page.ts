@@ -37,6 +37,25 @@ function hostOf(url: string): string {
   }
 }
 
+// Schemes that execute script when an href is clicked. Browser bookmark data
+// legitimately carries these (saved bookmarklets, or entries synced/shared/
+// imported from elsewhere), so the generated page must never emit them as live
+// links — a click would run script in the page's file:// origin. We block only
+// the executable schemes so genuine navigation bookmarks (view-source:, file:,
+// chrome:, http(s), mailto:, ...) keep working.
+const UNSAFE_SCHEMES = new Set(["javascript:", "data:", "vbscript:"]);
+
+// Returns the URL when it is safe to place in an href, else undefined. Parsing
+// via `new URL` normalizes case and strips embedded tab/newline obfuscation, so
+// "JavaScript:" and "java\tscript:" are both caught.
+function safeHref(url: string): string | undefined {
+  try {
+    return UNSAFE_SCHEMES.has(new URL(url).protocol) ? undefined : url;
+  } catch {
+    return undefined;
+  }
+}
+
 function monogram(s: string): string {
   const m = s.trim().match(/\p{L}|\p{N}/u);
   return m ? m[0].toUpperCase() : "•";
@@ -65,11 +84,25 @@ function tileIcon(seed: string, label: string): string {
 function leafMarkup(leaf: BookmarkLeaf, cls: string): string {
   const host = hostOf(leaf.url);
   const search = `${leaf.title} ${host}`.toLowerCase();
-  return (
-    `<a class="${cls}" href="${escapeAttr(leaf.url)}" rel="noreferrer"` +
-    ` data-s="${escapeAttr(search)}" title="${escapeAttr(leaf.url)}">` +
+  const inner =
     tileIcon(host, leaf.title || host) +
-    `<span class="t">${escapeHtml(leaf.title)}</span>` +
+    `<span class="t">${escapeHtml(leaf.title)}</span>`;
+  const href = safeHref(leaf.url);
+  if (href === undefined) {
+    // Non-navigable scheme (javascript:/data:/...). Render an <a> WITHOUT an
+    // href so it can't execute, but keep the .link/.tile class and data-s so
+    // it still shows and is reachable by search.
+    return (
+      `<a class="${cls} unsafe" data-s="${escapeAttr(search)}"` +
+      ` title="blocked scheme — ${escapeAttr(leaf.url)}">` +
+      inner +
+      `</a>`
+    );
+  }
+  return (
+    `<a class="${cls}" href="${escapeAttr(href)}" rel="noreferrer"` +
+    ` data-s="${escapeAttr(search)}" title="${escapeAttr(leaf.url)}">` +
+    inner +
     `</a>`
   );
 }
@@ -306,6 +339,7 @@ body{
 a.link,a.tile{display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--fg); border-radius:9px;}
 a.link{padding:6px 8px;}
 a.link:hover{background:var(--hover)}
+a.unsafe{opacity:.5; cursor:default}
 a.tile{
   flex-direction:column; align-items:flex-start; gap:8px; padding:11px;
   background:var(--panel); border:1px solid var(--border); min-height:74px;
