@@ -1,9 +1,19 @@
 #!/usr/bin/env tsx
 /**
- * Convert Arc Browser's StorableSidebar.json into a Netscape-format
- * bookmarks HTML file suitable for import into Vivaldi.
+ * Convert Arc Browser's StorableSidebar.json for migration off Arc.
  *
- *   tsx arc-to-vivaldi.ts [--input <path>] [--output <path>] [-v]
+ * Modes (mutually exclusive except --split):
+ *   (default)           Netscape bookmarks HTML       -> ./arc-bookmarks.html
+ *   --page              standalone offline Arc-style links page -> ./arc-spaces.html
+ *   --split             one file per Space (pairs with default or --page)
+ *   --inject[-dry-run]  paste-able Vivaldi Workspaces importer (DevTools)
+ *   --unwind[-dry-run]  close tabs a prior --inject created
+ *   --probe             dump Vivaldi's private-API surface
+ *
+ *   tsx arc-to-vivaldi.ts [--input <path>] [--output <path>] [--page] [--split] [-v]
+ *
+ * --input defaults to the OS-standard Arc path; --output to the per-mode file
+ * above, or a directory when --split. See README for the full Vivaldi flow.
  */
 
 import { readFile, writeFile, readdir, mkdir } from "node:fs/promises";
