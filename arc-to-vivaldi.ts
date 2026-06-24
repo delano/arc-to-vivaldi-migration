@@ -7,6 +7,7 @@
  *   --page              standalone offline Arc-style links page -> ./sparca.html
  *   --json              just the page's embedded data payload   -> ./sparca.json
  *   --split             one file per Space (pairs with default, --page or --json)
+ *   --favicons          (--page/--json) embed real favicons as data: URIs
  *   --inject[-dry-run]  paste-able Vivaldi Workspaces importer (DevTools)
  *   --unwind[-dry-run]  close tabs a prior --inject created
  *   --probe             dump Vivaldi's private-API surface
@@ -38,6 +39,7 @@ import { renderProbeScript } from "./lib/render-probe.js";
 import { renderInjectScript } from "./lib/render-inject.js";
 import { renderUnwindScript } from "./lib/render-unwind.js";
 import { renderPageDocument, buildWirePayload } from "./lib/render-page.js";
+import { collectHosts, fetchFavicons } from "./lib/favicons.js";
 import { extractAccentStops } from "./lib/arc-color.js";
 
 // ---------- Helpers ----------
@@ -437,12 +439,16 @@ async function main(): Promise<number> {
   if (args.help) {
     process.stdout.write(
       "usage: tsx arc-to-vivaldi.ts [--input <path>] [--output <path>]\n" +
-        "                            [--page | --json] [--split | --probe | --inject | --inject-dry-run]\n" +
+        "                            [--page | --json] [--split] [--favicons]\n" +
+        "                            [--probe | --inject | --inject-dry-run]\n" +
         "                            [-v]\n" +
         "  HTML modes (default): bookmark HTML. --page emits a standalone, offline\n" +
         "    Arc-style links page (editable, remembers state). --json emits just the\n" +
         "    embedded data payload (the page's contract). --split (one file per Space)\n" +
         "    works with html/page/json.\n" +
+        "  --favicons (--page/--json only): fetch real favicons at generation time and\n" +
+        "    embed them as data: URIs. The page still makes no network requests when\n" +
+        "    opened; the fetch discloses your hostnames to a favicon provider at export.\n" +
         "  JS payload modes: --probe, --inject, --inject-dry-run are mutually exclusive\n" +
         "    and cannot be combined with --split, --page, or --json.\n",
     );
@@ -523,6 +529,18 @@ async function main(): Promise<number> {
     totalFolders += stats.folders;
   }
 
+  // Favicons (opt-in): fetched here at generation time and embedded as data:
+  // URIs, so the page makes no network requests when opened. Page/JSON only.
+  let icons: ReadonlyMap<string, string> | undefined;
+  if (args.favicons && (args.mode === "page" || args.mode === "json")) {
+    const hosts = collectHosts(conversions);
+    process.stderr.write(`fetching favicons for ${hosts.length} hosts…\n`);
+    icons = await fetchFavicons(hosts, {
+      log: args.verbose ? (m) => process.stderr.write(`  ${m}\n`) : undefined,
+    });
+    process.stderr.write(`embedded ${icons.size}/${hosts.length} favicons\n`);
+  }
+
   if (args.mode === "inject" || args.mode === "inject-dry-run") {
     const outPath = args.output ?? "./vivaldi-import.js";
     const payload = buildInjectablePayload(conversions, {
@@ -573,13 +591,13 @@ async function main(): Promise<number> {
       for (const c of conversions) {
         const slug = uniqueSlug(slugify(c.title), taken);
         const filePath = join(outDir, `arc-${slug}.json`);
-        const payload = buildWirePayload([c], { generatedAt, title: c.title });
+        const payload = buildWirePayload([c], { generatedAt, title: c.title, icons });
         await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
         jsonPaths.push(filePath);
       }
     } else {
       const outPath = args.output ?? "./sparca.json";
-      const payload = buildWirePayload(conversions, { generatedAt });
+      const payload = buildWirePayload(conversions, { generatedAt, icons });
       await writeFile(outPath, JSON.stringify(payload, null, 2), "utf8");
       jsonPaths.push(outPath);
     }
@@ -604,7 +622,7 @@ async function main(): Promise<number> {
         const filePath = join(outDir, `arc-${slug}.html`);
         await writeFile(
           filePath,
-          renderPageDocument([c], { generatedAt, title: c.title }),
+          renderPageDocument([c], { generatedAt, title: c.title, icons }),
           "utf8",
         );
         pagePaths.push(filePath);
@@ -614,7 +632,7 @@ async function main(): Promise<number> {
       }
     } else {
       const outPath = args.output ?? "./sparca.html";
-      await writeFile(outPath, renderPageDocument(conversions, { generatedAt }), "utf8");
+      await writeFile(outPath, renderPageDocument(conversions, { generatedAt, icons }), "utf8");
       pagePaths.push(outPath);
     }
     const destination = args.split

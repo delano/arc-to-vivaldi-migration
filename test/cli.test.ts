@@ -8,9 +8,20 @@ test("parseArgs: defaults", () => {
     output: undefined,
     verbose: false,
     split: false,
+    favicons: false,
     mode: "html",
     help: false,
   });
+});
+
+test("parseArgs: --favicons combines with --page and --json", () => {
+  strictEqual(parseArgs(["--page", "--favicons"]).favicons, true);
+  strictEqual(parseArgs(["--json", "--favicons"]).favicons, true);
+});
+
+test("parseArgs: --favicons without --page/--json is rejected", () => {
+  throws(() => parseArgs(["--favicons"]), /favicons only applies/i);
+  throws(() => parseArgs(["--favicons", "--inject"]), /favicons only applies/i);
 });
 
 test("parseArgs: --page sets mode to page", () => {

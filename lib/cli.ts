@@ -13,6 +13,9 @@ export interface CliArgs {
   readonly output: string | undefined;
   readonly verbose: boolean;
   readonly split: boolean;
+  // Fetch real favicons at generation time and embed them as data: URIs.
+  // Only meaningful for --page / --json (the only outputs that render icons).
+  readonly favicons: boolean;
   readonly mode: CliMode;
   readonly help: boolean;
 }
@@ -22,6 +25,7 @@ export function parseArgs(argv: readonly string[]): CliArgs {
   let output: string | undefined;
   let verbose = false;
   let split = false;
+  let favicons = false;
   let mode: CliMode = "html";
   let help = false;
 
@@ -48,6 +52,8 @@ export function parseArgs(argv: readonly string[]): CliArgs {
       i++;
     } else if (arg === "--split") {
       split = true;
+    } else if (arg === "--favicons") {
+      favicons = true;
     } else if (arg === "--page") {
       setMode("page");
     } else if (arg === "--json") {
@@ -78,5 +84,15 @@ export function parseArgs(argv: readonly string[]): CliArgs {
     );
   }
 
-  return { input, output, verbose, split, mode, help };
+  // Membership test rather than `mode !== "page" && mode !== "json"`: `mode` is
+  // reassigned only inside the setMode closure, which TS's control-flow analysis
+  // doesn't track, so it still believes the type is the "html" initializer and
+  // flags direct comparison to other literals as non-overlapping. Set.has(mode)
+  // takes a CliMode and dodges that.
+  const FAVICON_MODES: ReadonlySet<CliMode> = new Set(["page", "json"]);
+  if (favicons && !FAVICON_MODES.has(mode)) {
+    throw new Error("--favicons only applies to --page or --json output");
+  }
+
+  return { input, output, verbose, split, favicons, mode, help };
 }
