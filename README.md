@@ -63,6 +63,7 @@ Flags:
 | `--output <path>` | Output file (combined mode) or directory (with `--split`).                |
 | `--split`         | One file per Space, named `arc-<slug>.html`. Works with `--page` too.      |
 | `--page`          | Emit a standalone, offline Arc-style links page instead of bookmark HTML. |
+| `--favicons`      | (`--page`/`--json`) Fetch real favicons at generation time and embed them as `data:` URIs. See the privacy note below. |
 | `-v`, `--verbose` | Print a per-Space breakdown.                                              |
 | `-h`, `--help`    | Print usage.                                                              |
 | `--probe`              | Emit `probe-vivaldi.js` for Vivaldi private-API discovery. See "Experimental" section below. |
@@ -101,9 +102,16 @@ What you get:
   grid, then the open tabs.
 - **Split views** preserved as labeled side-by-side (or stacked) panes rather
   than flattened into a folder.
-- A search box that filters links across every Space at once, and a "Show all"
-  vertical view of every Space with arrow-key navigation (↑↓ move between links,
-  ←→ hop between Spaces).
+- A search box that filters links across every Space at once, plus a "Show all"
+  view of every Space. That view has two layouts: **long** (stacked) and **wide**
+  (each Space its own column, one row of columns); the choice is remembered.
+- Keyboard navigation: `/` to search, `↑↓` to move between links and `←→` to hop
+  between Spaces (fine), and `Tab` to cycle coarsely (search → each Space's first
+  link → the Show all / Export / Import / Reset actions → back to search). `1`–`9`
+  open pinned tiles; `⌥1`–`9` switch Space; `⌥0` toggles Show all.
+- Optional **real favicons** (`--favicons`): fetched once at generation time and
+  embedded inline, with a colored monogram tile as the fallback for any site
+  whose icon can't be resolved.
 - Light and dark themes (follows your OS setting).
 
 **Offline and private by construction.** The page makes **zero** third-party
@@ -112,6 +120,13 @@ icons are drawn locally as colored monogram tiles, so nothing about your links
 leaves your machine just by viewing the page. Links carry `rel="noreferrer"`.
 Because the file embeds your real URLs and titles, it's covered by
 `.gitignore` (`arc-*.html`, `arc-*.json`, `sparca.html`, `sparca.json`) — don't commit it.
+
+`--favicons` keeps the *open-time* guarantee intact: icons are fetched while the
+file is being generated and baked in as `data:` URIs, so opening the page still
+makes no network requests. The one trade-off is at **generation** time — your
+machine queries a favicon provider (Google's s2 endpoint, falling back to
+DuckDuckGo) with the hostnames you've bookmarked. It's off by default; leave it
+off if you'd rather your hostnames never reach a third party at all.
 
 ## Experimental: recreate Arc Spaces as Vivaldi Workspaces
 
