@@ -215,7 +215,7 @@ test("renderPageDocument: ships the hardened client (validation, recovery, share
     "pinned folders render against the real backing array, not a throwaway split");
   ok(html.includes("function fatal"),
     "boot has a visible fallback instead of a blank page on corruption");
-  ok(html.includes("Shortcuts"), "sidebar ships the shortcuts cheatsheet");
+  ok(html.includes("Shortcuts"), "help overlay ships the shortcuts cheatsheet");
   ok(!html.includes("\\u2625"), "option-key hint is U+2325 (⌥), not the U+2625 ankh");
 });
 
@@ -306,16 +306,16 @@ test("renderPageDocument: arrows are scoped to the active Space (no Space switch
 });
 
 // AVATAR REMOVAL regression: the main-content Space header no longer emits the
-// single-letter monogram/avatar tile. The emoji/monogram is kept in the sidebar
-// nav badge and as the favicon fallback, so those constructs must remain.
+// single-letter monogram/avatar tile. The emoji/monogram is kept in the top bar
+// Space-tab badge and as the favicon fallback, so those constructs must remain.
 test("renderPageDocument: main-content space header drops the monogram avatar tile", () => {
   const html = renderPageDocument(twoTier, opts);
   // The banner emoji span must not be appended in renderContent anymore.
   ok(!html.includes("banner.appendChild(el('span','emoji', sp.emoji))"),
     "renderContent no longer emits the main-content avatar tile");
-  // The sidebar nav badge and the favicon monogram fallback are untouched.
+  // The top bar Space-tab badge and the favicon monogram fallback are untouched.
   ok(html.includes("el('span','badge', sp.emoji)"),
-    "sidebar nav badge still carries the Space emoji/monogram");
+    "top bar Space-tab badge still carries the Space emoji/monogram");
   ok(html.includes("s.textContent = monogram(label)"),
     "favicon fallback monogram is preserved");
 });
@@ -533,4 +533,46 @@ test("renderPageDocument: search-active state foregrounds matches and de-emphasi
   // The de-emphasis must not hide the scaffolding it targets.
   ok(!/body\.searching \.fname\{[^}]*display:\s*none/.test(html),
     "muted scaffolding stays visible for context");
+});
+
+// ---- Arc-style top bar + overlays ----
+// The left sidebar is gone (Vivaldi supplies its own Spaces panel). The chrome
+// is a thin sticky top bar with the brand, a horizontal Space-tab switcher, and
+// a tools cluster (search + '?'). Search lives in a slim non-dimming floating
+// overlay; mode buttons + the cheatsheet live behind '?' in a dimmed help modal.
+test("renderPageDocument: Arc-style top bar replaces the left sidebar", () => {
+  const html = renderPageDocument(twoTier, opts);
+  // No left sidebar; the thin top bar exists instead.
+  ok(!html.includes('class="sidebar"'), "the left sidebar element is gone");
+  ok(html.includes('class="topbar"'), "the thin sticky top bar exists");
+  // The Space switcher is now horizontal tabs, not the old vertical list.
+  ok(html.includes("space-tab"), "Spaces render as horizontal .space-tab buttons");
+  ok(!html.includes("'space-link'"), "the old vertical space-link builder is gone");
+});
+
+test("renderPageDocument: search lives in a slim floating overlay opened by '/'", () => {
+  const html = renderPageDocument(twoTier, opts);
+  ok(html.includes('id="searchOverlay"'), "the search overlay element exists");
+  ok(html.includes("openSearch"), "openSearch wires the floating search bar");
+  ok(html.includes("openSearch()"), "'/' opens the search overlay");
+  // It still reuses the in-place filter (onSearch + body.searching), not a new one.
+  ok(html.includes("function onSearch"), "search reuses the existing in-place filter");
+});
+
+test("renderPageDocument: help + mode buttons live behind '?' in a dimmed modal", () => {
+  const html = renderPageDocument(twoTier, opts);
+  ok(html.includes('id="helpOverlay"'), "the help overlay element exists");
+  ok(html.includes("toggleHelp"), "toggleHelp wires the '?' affordance");
+  ok(html.includes("e.key==='?'"), "'?' (Shift+/) is wired to the help overlay");
+  ok(html.includes("closeHelp"), "Esc / '?' close the help overlay");
+});
+
+test("renderPageDocument: tabStops drops the hidden action buttons", () => {
+  const html = renderPageDocument(twoTier, opts);
+  // The action buttons moved into the (hidden) help overlay, so Tab must not
+  // target them; the search input is a stop only while its overlay is open.
+  ok(!/stops\.push\(expBtn\)/.test(html),
+    "tabStops no longer pushes the Export/action buttons");
+  ok(html.includes("q.offsetParent!==null"),
+    "the search input is a Tab stop only while the search overlay is open");
 });

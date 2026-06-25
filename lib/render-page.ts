@@ -252,8 +252,10 @@ export function renderPageDocument(
 </head>
 <body>
 <noscript class="noscript">This SpArca page is interactive and needs JavaScript. Your data is embedded below; nothing is sent anywhere.</noscript>
-<aside class="sidebar" id="sidebar" aria-label="Spaces and search"></aside>
-<main class="content" id="content" aria-label="Bookmarks"></main>
+<header class="topbar" id="topbar" aria-label="Spaces and tools"></header>
+<main class="content" id="content" tabindex="-1" aria-label="Bookmarks"></main>
+<div class="ov ov-search" id="searchOverlay" hidden></div>
+<div class="ov ov-help" id="helpOverlay" hidden></div>
 <script type="application/json" id="arc-data">${embedJson(payload)}</script>
 <script>${SCRIPT}</script>
 </body>
@@ -290,40 +292,51 @@ body[data-theme="sepia"]{
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
-  margin:0; display:grid; grid-template-columns:264px 1fr; height:100vh;
+  margin:0; display:flex; flex-direction:column; height:100vh;
   background:var(--bg); color:var(--fg);
   font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   -webkit-font-smoothing:antialiased;
 }
 .noscript{position:fixed; inset:0; padding:24px; background:var(--bg); color:var(--fg); z-index:99;}
-.sidebar{
-  display:flex; flex-direction:column; gap:10px; padding:14px 12px;
-  border-right:1px solid var(--border); background:var(--panel); overflow:hidden;
+/* Thin sticky top bar: brand + horizontal Space tabs + a tools cluster
+   (search + help). Replaces the old left sidebar; the page is viewed inside
+   Vivaldi which already supplies a vertical Spaces panel. */
+.topbar{
+  position:sticky; top:0; z-index:40; flex:0 0 auto;
+  display:flex; align-items:center; gap:12px; padding:8px 16px;
+  border-bottom:1px solid var(--border); background:var(--panel);
 }
-.brand{font-weight:700; font-size:15px; padding:2px 6px;}
+.brand{font-weight:700; font-size:15px; padding:2px 6px; flex:0 0 auto;}
+.spacetabs{display:flex; gap:4px; overflow-x:auto; flex:1; min-width:0; scrollbar-width:thin;}
+.spacetabs::-webkit-scrollbar{height:6px;}
+.spacetabs::-webkit-scrollbar-thumb{background:var(--border); border-radius:3px;}
+.space-tab{
+  display:flex; align-items:center; gap:8px; flex:0 0 auto;
+  padding:5px 10px; border:0; border-radius:9px; background:transparent;
+  color:var(--fg); font:inherit; cursor:pointer;
+}
+.space-tab:hover{background:var(--hover)}
+.space-tab.active{background:var(--hover); box-shadow:inset 0 -2px 0 var(--a1)}
+.badge{
+  flex:0 0 auto; width:24px; height:24px; border-radius:7px;
+  display:grid; place-items:center; font-size:13px; color:#fff;
+  background:linear-gradient(135deg,var(--a1),var(--a2));
+}
+.space-tab .nm{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px;}
+.space-tab .ct{flex:0 0 auto; font-size:11px; color:var(--muted);}
+.topbar-tools{display:flex; align-items:center; gap:6px; flex:0 0 auto;}
+.iconbtn{
+  width:30px; height:30px; display:grid; place-items:center;
+  border:1px solid var(--border); border-radius:8px; background:var(--bg);
+  color:var(--fg); font:inherit; font-size:14px; cursor:pointer;
+}
+.iconbtn:hover{border-color:var(--muted)}
 .search{
   width:100%; padding:9px 11px; border:1px solid var(--border); border-radius:10px;
   background:var(--bg); color:var(--fg); font-size:13px; outline:none;
 }
 .search:focus{border-color:var(--muted)}
 .count{font-size:12px; color:var(--muted); min-height:14px; padding:0 6px;}
-.spaces{display:flex; flex-direction:column; gap:2px; overflow-y:auto; margin:-2px; padding:2px;}
-.space-link{
-  display:flex; align-items:center; gap:10px; width:100%; text-align:left;
-  padding:7px 8px; border:0; border-radius:9px; background:transparent;
-  color:var(--fg); font:inherit; cursor:pointer;
-}
-.space-link:hover{background:var(--hover)}
-.space-link.active{background:var(--hover); box-shadow:inset 3px 0 0 -1px var(--a1)}
-.space-link .key{flex:0 0 auto; font-size:10px; color:var(--muted); width:16px; text-align:right;}
-.badge{
-  flex:0 0 auto; width:24px; height:24px; border-radius:7px;
-  display:grid; place-items:center; font-size:13px; color:#fff;
-  background:linear-gradient(135deg,var(--a1),var(--a2));
-}
-.space-link .nm{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.space-link .ct{flex:0 0 auto; font-size:11px; color:var(--muted);}
-.foot{margin-top:auto; display:flex; flex-direction:column; gap:8px; padding:6px;}
 .actions{display:flex; flex-wrap:wrap; gap:6px;}
 .mini{
   font:inherit; font-size:11.5px; padding:4px 9px; border:1px solid var(--border);
@@ -341,7 +354,35 @@ body.allspaces .layout-btn{display:inline-block;}
 .legend-sep{opacity:.45}
 .legend kbd{font:inherit; font-size:10px; background:var(--hover); border:1px solid var(--border); border-radius:4px; padding:0 4px; color:var(--muted);}
 
-.content{overflow-y:auto; padding:24px clamp(16px,4vw,48px); scroll-behavior:smooth;}
+/* ---- overlays ---- */
+.ov{position:fixed; inset:0; z-index:50;}
+/* Search is a slim floating command bar that does NOT dim the content, so the
+   in-place filtered matches stay visible behind it. The overlay is click-through
+   (pointer-events:none) so a click lands on the match underneath rather than on
+   the overlay; only the bar itself re-enables pointer events. */
+.ov-search{background:transparent; pointer-events:none;}
+.searchbar{
+  position:absolute; top:10%; left:50%; transform:translateX(-50%);
+  width:min(560px,92vw);
+  /* Frosted/translucent: the panel colour at ~60% opacity over a backdrop blur,
+     so the content clearly shows through the bar. Translucent BACKGROUND (not
+     element opacity) keeps the input text + count fully legible. */
+  background:color-mix(in srgb, var(--panel) 60%, transparent);
+  -webkit-backdrop-filter:blur(16px) saturate(1.4); backdrop-filter:blur(16px) saturate(1.4);
+  border:1px solid var(--border);
+  border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.25); padding:10px 12px;
+  pointer-events:auto;
+}
+/* Help IS a dimmed modal; it does not need to show content behind it. */
+.ov-help{background:rgba(0,0,0,.4);}
+.helpcard{
+  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  background:var(--panel); border:1px solid var(--border); border-radius:16px;
+  max-width:460px; width:92vw; max-height:85vh; overflow:auto; padding:18px 20px;
+  box-shadow:0 20px 60px rgba(0,0,0,.35); display:flex; flex-direction:column; gap:12px;
+}
+
+.content{flex:1 1 auto; overflow-y:auto; padding:24px clamp(16px,4vw,48px); scroll-behavior:smooth;}
 .bar{
   max-width:980px; margin:0 auto 16px; padding:10px 14px; border-radius:12px;
   background:var(--panel); border:1px solid var(--border);
@@ -504,7 +545,7 @@ body.searching details.folder>summary::before{opacity:.3;}
 body.searching .pill,
 body.searching .dial{background:transparent; color:var(--muted); opacity:.6;}
 body.searching .badge{background:var(--hover); color:var(--muted); box-shadow:none;}
-body.searching .space-link .ct{opacity:.6;}
+body.searching .space-tab .ct{opacity:.6;}
 /* De-emphasize space banners: drop the heavy gradient + overlay + shadows to a
    flat panel chip so the loud colour block stops competing with the matches. */
 body.searching .banner{
@@ -885,7 +926,12 @@ const SCRIPT = `
 
   // ---- content build ----
   var content = document.getElementById('content');
-  var sidebar = document.getElementById('sidebar');
+  var topbar = document.getElementById('topbar');
+  var searchOverlay = document.getElementById('searchOverlay');
+  var helpOverlay = document.getElementById('helpOverlay');
+  var helpcard;
+  var helpOpen = false;
+  var helpReturn = null;
   var q, count, nav, allBtn, expBtn, impBtn, resetBtn, layoutBtn;
   var activeId = lsGet(KEY_ACTIVE);
   var fullView = false;
@@ -912,7 +958,7 @@ const SCRIPT = `
 
       // No monogram/avatar tile in the main-content header: the Space title
       // carries its own identity here. The emoji/monogram still appears in the
-      // sidebar nav badge and as the favicon fallback.
+      // top bar Space-tab badge and as the favicon fallback.
       var banner = el('header','banner');
       var meta = el('div','meta'); meta.appendChild(el('h1', null, sp.title));
       var nL = spaceCount(sp), nF = spaceFolders(sp);
@@ -974,16 +1020,33 @@ const SCRIPT = `
     return bar;
   }
 
-  // ---- sidebar (built once; nav + counts refreshed on change) ----
+  // ---- shell: thin top bar + the search and help overlays (built once;
+  // nav + counts refreshed on change). Replaces the old left sidebar. ----
   function buildShell(){
-    sidebar.textContent='';
-    sidebar.appendChild(el('div','brand', DATA.title));
-    q = el('input','search'); q.type='search'; q.name='search'; q.id='q'; q.placeholder='Search links\\u2026'; q.autocomplete='off'; q.spellcheck=false; q.setAttribute('aria-label','Search links');
-    sidebar.appendChild(q);
-    count = el('div','count'); count.setAttribute('aria-live','polite'); sidebar.appendChild(count);
-    nav = el('nav','spaces'); sidebar.appendChild(nav);
+    // --- top bar: brand + horizontal Space tabs + tools (search, help) ---
+    topbar.textContent='';
+    topbar.appendChild(el('div','brand', DATA.title));
+    nav = el('nav','spacetabs'); topbar.appendChild(nav);
+    var tools = el('div','topbar-tools');
+    var searchBtn = el('button','iconbtn','\\u2315'); searchBtn.type='button'; searchBtn.setAttribute('aria-label','Search'); searchBtn.title='Search'; searchBtn.addEventListener('click', toggleSearch); tools.appendChild(searchBtn);
+    var helpBtn = el('button','iconbtn','?'); helpBtn.type='button'; helpBtn.setAttribute('aria-label','Help and shortcuts'); helpBtn.title='Help and shortcuts'; helpBtn.addEventListener('click', toggleHelp); tools.appendChild(helpBtn);
+    topbar.appendChild(tools);
 
-    var foot = el('div','foot');
+    // --- search overlay: a slim floating command bar (does not dim content) ---
+    searchOverlay.textContent='';
+    var searchbar = el('div','searchbar');
+    q = el('input','search'); q.type='search'; q.name='search'; q.id='q'; q.placeholder='Search links\\u2026'; q.autocomplete='off'; q.spellcheck=false; q.setAttribute('aria-label','Search links');
+    searchbar.appendChild(q);
+    count = el('div','count'); count.setAttribute('aria-live','polite'); searchbar.appendChild(count);
+    searchOverlay.appendChild(searchbar);
+    // No backdrop click-to-close: the overlay is pointer-events:none so a click
+    // passes through to the match underneath. Close via Esc or the search button.
+    q.addEventListener('input', onSearch);
+    q.addEventListener('keydown', function(e){ if(e.key==='Escape'){ e.preventDefault(); closeSearch(); } });
+
+    // --- help overlay: a dimmed modal with the mode buttons + cheatsheet ---
+    helpOverlay.textContent='';
+    helpcard = el('div','helpcard');
     var actions = el('div','actions');
     allBtn = el('button','mini','Show all'); allBtn.addEventListener('click', toggleFull); actions.appendChild(allBtn);
     layoutBtn = el('button','mini layout-btn'); layoutBtn.type='button'; layoutBtn.addEventListener('click', toggleWide); actions.appendChild(layoutBtn);
@@ -991,11 +1054,12 @@ const SCRIPT = `
     impBtn = el('button','mini','Import'); var file = el('input'); file.type='file'; file.accept='application/json,.json'; file.style.display='none';
     impBtn.addEventListener('click', function(){ file.click(); }); file.addEventListener('change', importJson); actions.appendChild(impBtn); actions.appendChild(file);
     resetBtn = el('button','mini','Reset'); resetBtn.addEventListener('click', resetAll); actions.appendChild(resetBtn);
-    foot.appendChild(actions);
+    helpcard.appendChild(actions);
     var legend = el('div','legend');
     legend.appendChild(el('div','legend-h','Shortcuts'));
     var cheats = [
       [['/'], 'Search'],
+      [['?'], 'Help'],
       [['1\\u20139'], 'Open pinned'],
       [['\\u23251\\u20139'], 'Switch Space'],
       [['\\u23250'], 'Show all Spaces'],
@@ -1012,21 +1076,45 @@ const SCRIPT = `
       lr.appendChild(el('span','legend-lbl', cheats[ci][1]));
       legend.appendChild(lr);
     }
-    foot.appendChild(legend);
-    sidebar.appendChild(foot);
-
-    q.addEventListener('input', onSearch);
-    q.addEventListener('keydown', function(e){ if(e.key==='Escape'){ q.value=''; exitSearch(); count.textContent=''; } });
+    helpcard.appendChild(legend);
+    helpOverlay.appendChild(helpcard);
+    helpOverlay.addEventListener('click', function(e){ if(e.target===helpOverlay) closeHelp(); });
   }
   function kbd(t){ return el('kbd', null, t); }
+
+  // ---- overlay open/close + focus ----
+  function openSearch(){ searchOverlay.hidden=false; q.focus(); q.select(); }
+  function closeSearch(){
+    searchOverlay.hidden=true; q.value=''; exitSearch(); count.textContent='';
+    var back = (roveEl && content.contains(roveEl)) ? roveEl : content;
+    try{ back.focus({preventScroll:true}); }catch(_e){ try{ back.focus(); }catch(_e2){} }
+  }
+  function toggleSearch(){ if(searchOverlay.hidden) openSearch(); else closeSearch(); }
+  // Only visible controls are Tab targets: the file input is always display:none
+  // and layoutBtn is hidden until body.allspaces, so an unfiltered list would
+  // stall the Tab trap on a no-op focus(). Same offsetParent gate as firstFocusable.
+  function helpStops(){
+    if(!helpcard) return [];
+    var all = helpcard.querySelectorAll('button, input, a[href]'), out=[], i;
+    for(i=0;i<all.length;i++){ if(all[i].offsetParent!==null) out.push(all[i]); }
+    return out;
+  }
+  function openHelp(){ helpReturn = document.activeElement; helpOverlay.hidden=false; helpOpen=true; if(allBtn){ try{ allBtn.focus(); }catch(_e){} } }
+  function closeHelp(){
+    helpOverlay.hidden=true; helpOpen=false;
+    // Restore focus to the opener; fall back to content (tabindex=-1) if it was
+    // detached (e.g. a rerender from import/reset while help was open) or hidden.
+    var back = (helpReturn && document.contains(helpReturn) && helpReturn.offsetParent!==null) ? helpReturn : content;
+    try{ back.focus({preventScroll:true}); }catch(_e){ try{ back.focus(); }catch(_e2){} }
+  }
+  function toggleHelp(){ if(helpOpen) closeHelp(); else openHelp(); }
 
   function renderNav(){
     nav.textContent='';
     for(var i=0;i<working.spaces.length;i++){
       (function(sp, idx){
-        var b = el('button','space-link'); b.type='button'; b.setAttribute('data-space', sp.id);
+        var b = el('button','space-tab'); b.type='button'; b.setAttribute('data-space', sp.id);
         b.style.setProperty('--a1', sp.accent[0]); b.style.setProperty('--a2', sp.accent[1]);
-        b.appendChild(el('span','key', idx<9 ? ('\\u2325'+(idx+1)) : ''));
         b.appendChild(el('span','badge', sp.emoji));
         b.appendChild(el('span','nm', sp.title));
         b.appendChild(el('span','ct', String(spaceCount(sp))));
@@ -1042,7 +1130,7 @@ const SCRIPT = `
     var found=false, i;
     for(i=0;i<spaces.length;i++){ var on = spaces[i].id===activeId; spaces[i].classList.toggle('active', on); if(on) found=true; }
     if(!found && spaces.length){ activeId = spaces[0].id; lsSet(KEY_ACTIVE, activeId); spaces[0].classList.add('active'); }
-    var navs = nav.querySelectorAll('.space-link');
+    var navs = nav.querySelectorAll('.space-tab');
     for(i=0;i<navs.length;i++) navs[i].classList.toggle('active', navs[i].getAttribute('data-space')===activeId);
   }
   function gotoSpace(id){
@@ -1149,14 +1237,13 @@ const SCRIPT = `
   // Space-to-Space. Distinct from the arrow rove (fine: every link). Tab is
   // intentionally hijacked here, so intra-Space links and per-item remove
   // buttons are reached with the arrows or the mouse, not with Tab.
+  // search input (only when the search overlay is open) -> each VISIBLE Space's
+  // first link -> back. The mode/action buttons now live in the help overlay,
+  // which has its own focus trap, so they are NOT part of this cycle.
   function tabStops(){
-    var stops=[q], vs=visibleSpaces(), i;
+    var stops=[], vs=visibleSpaces(), i;
+    if(q && q.offsetParent!==null) stops.push(q); // only when search overlay open
     for(i=0;i<vs.length;i++){ var f=firstFocusable(vs[i]); if(f) stops.push(f); }
-    if(allBtn) stops.push(allBtn);
-    if(layoutBtn && fullView) stops.push(layoutBtn); // only focusable while shown
-    if(expBtn) stops.push(expBtn);
-    if(impBtn) stops.push(impBtn);
-    if(resetBtn) stops.push(resetBtn);
     return stops;
   }
   function tabStopIndex(stops){
@@ -1260,9 +1347,31 @@ const SCRIPT = `
   // ---- keyboard ----
   document.addEventListener('keydown', function(e){
     var t = e.target, typing = t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable);
-    // Tab works even from the search field (its whole point is search -> links).
-    if(e.key==='Tab' && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); tabCycle(!e.shiftKey); return; }
-    if(!typing && e.key==='/' && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); q.focus(); return; }
+    // Tab: while help is open it is trapped inside the helpcard; otherwise it
+    // works even from the search field (its whole point is search -> links).
+    if(e.key==='Tab' && !e.metaKey && !e.ctrlKey && !e.altKey){
+      e.preventDefault();
+      if(helpOpen){
+        var hs = helpStops(); if(!hs.length) return;
+        var ai = -1; for(var hi=0; hi<hs.length; hi++){ if(hs[hi]===document.activeElement){ ai=hi; break; } }
+        var nh = ai<0 ? (e.shiftKey?hs.length-1:0) : (ai + (e.shiftKey?-1:1));
+        if(nh<0) nh += hs.length; if(nh>=hs.length) nh -= hs.length;
+        try{ hs[nh].focus(); }catch(_e){}
+        return;
+      }
+      tabCycle(!e.shiftKey); return;
+    }
+    // Document-level Esc: close the help overlay first, else the search overlay.
+    if(e.key==='Escape'){
+      if(helpOpen){ e.preventDefault(); closeHelp(); return; }
+      if(!searchOverlay.hidden){ e.preventDefault(); closeSearch(); return; }
+    }
+    // '?' (Shift+/) toggles the help overlay even while help is open (to close it).
+    if(!typing && e.key==='?' && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); toggleHelp(); return; }
+    // While help is open, the remaining shortcuts (search, arrows, digits, etc.)
+    // are inert; only Tab/Esc/'?' above reach it.
+    if(helpOpen) return;
+    if(!typing && e.key==='/' && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); openSearch(); return; }
     if(!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey){
       if(e.key==='ArrowDown'){ e.preventDefault(); rove(1); return; }
       if(e.key==='ArrowUp'){ e.preventDefault(); rove(-1); return; }
@@ -1314,7 +1423,7 @@ const SCRIPT = `
   }catch(_e){}
 
   // ---- boot ----
-  function boot(){ buildShell(); applyLayout(); applyUrls(); applyTheme(); rerender(); q.focus(); }
+  function boot(){ buildShell(); applyLayout(); applyUrls(); applyTheme(); rerender(); }
   try{ boot(); }
   catch(e){
     // A corrupt working tree slipped past validation: discard it, fall back to
